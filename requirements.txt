@@ -3,6 +3,7 @@ plotly>=5.22
 numpy
 pandas
 xarray
+netCDF4
 matplotlib
 Pillow
 requests
