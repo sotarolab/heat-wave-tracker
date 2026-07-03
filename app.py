@@ -360,10 +360,10 @@ def _mapbox_figure(
                 colorscale=vm["plotly"], cmin=vmin, cmax=vmax,
                 showscale=True,
                 colorbar=dict(
-                    title=_unit_label(unit), thickness=14, len=0.75,
+                    title=dict(text=_unit_label(unit), font=dict(color="#cbd5e1")),
+                    thickness=14, len=0.75,
                     bgcolor="rgba(15,23,42,0.7)",
                     tickfont=dict(color="#cbd5e1"),
-                    titlefont=dict(color="#cbd5e1"),
                     x=1.0,
                 ),
             ),
