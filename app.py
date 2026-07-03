@@ -586,6 +586,22 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
         ], style={"display": "flex", "alignItems": "center", "padding": "6px 10px",
                   "fontSize": "12px", "borderBottom": "1px solid #1e293b"}))
 
+    subtitle = "Ranked by forecasted Heat Index"
+    if time_label:
+        subtitle += f"  ·  {time_label}"
+
+    return html.Div([
+        html.H3("Hottest Cities Right Now",
+                style={"fontSize": "14px", "color": "#f8fafc", "margin": "0 0 4px 0"}),
+        html.Div(subtitle,
+                 style={"fontSize": "11px", "color": "#64748b", "marginBottom": "8px"}),
+        html.Div(rows),
+    ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "12px 14px"})
+
+
+def _risk_legend() -> html.Div:
+    """Standalone risk-category legend, placed right under the main map so
+    the color coding is explained wherever it appears on screen."""
     legend_order = [(NO_RISK_LABEL, NO_RISK_COLOR)] + [(label, color) for _, label, color in RISK_CATEGORIES_F]
     legend_chips = [
         html.Span([
@@ -599,24 +615,10 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
         for label, color in legend_order
     ]
     legend_chips.append(_risk_source_link())
-    legend = html.Div(legend_chips,
-                      style={"display": "flex", "flexWrap": "wrap", "gap": "6px 0",
-                             "fontSize": "11px", "marginTop": "10px", "paddingTop": "10px",
-                             "borderTop": "1px solid #334155"})
-
-    subtitle = "Ranked by forecasted Heat Index"
-    if time_label:
-        subtitle += f"  ·  {time_label}"
-
-    return html.Div([
-        html.H3("Hottest Cities Right Now",
-                style={"fontSize": "14px", "color": "#f8fafc", "margin": "0 0 4px 0"}),
-        html.Div(subtitle,
-                 style={"fontSize": "11px", "color": "#64748b", "marginBottom": "8px"}),
-        html.Div(rows),
-        legend,
-    ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "12px 14px",
-              "marginTop": "16px"})
+    return html.Div(legend_chips,
+                    style={"display": "flex", "flexWrap": "wrap", "gap": "6px 0",
+                           "fontSize": "11px", "margin": "10px 0 0 0", "paddingTop": "10px",
+                           "borderTop": "1px solid #334155"})
 
 
 # ── station panel figure ──────────────────────────────────────────────────────
@@ -953,10 +955,17 @@ app.layout = html.Div(
                    "display": "flex", "alignItems": "center",
                    "justifyContent": "space-between"},
             children=[
-                html.H1("2026 US Heat Wave Tracker",
-                    style={"color": "#f8fafc", "margin": 0,
-                           "fontSize": "20px", "fontWeight": "600"}),
-                html.Span(_init_label,
+                html.Div([
+                    html.H1("2026 US Heat Wave Tracker",
+                        style={"color": "#f8fafc", "margin": 0, "display": "inline-block",
+                               "fontSize": "20px", "fontWeight": "600", "verticalAlign": "middle"}),
+                    html.Span("LIVE", title="Forecast data refreshes automatically every 6 hours",
+                        style={"backgroundColor": "#dc2626", "color": "#fef2f2",
+                               "fontSize": "10px", "fontWeight": "700", "letterSpacing": "0.5px",
+                               "padding": "2px 7px", "borderRadius": "999px",
+                               "marginLeft": "10px", "verticalAlign": "middle"}),
+                ]),
+                html.Span(f"{_init_label}  ·  Auto-updates every 6h",
                     style={"fontSize": "12px", "color": "#64748b"}),
             ],
         )),
@@ -1024,7 +1033,7 @@ app.layout = html.Div(
                     style={"display": "block", "textAlign": "center",
                            "fontSize": "13px", "color": "#94a3b8",
                            "margin": "8px 0"}),
-                html.Div(id="leaderboard-panel"),
+                html.Div(id="risk-legend-panel"),
             ],
         )),
 
@@ -1072,6 +1081,14 @@ app.layout = html.Div(
                 ], style={"fontSize": "11px", "color": "#64748b", "marginBottom": "10px",
                          "maxWidth": "820px", "lineHeight": "1.5"}),
                 html.Div(id="station-panel"),
+            ],
+        )),
+
+        # ── leaderboard ───────────────────────────────────────────────────────
+        _page_section(None, None, html.Div(
+            style={"padding": "0 24px 24px 24px"},
+            children=[
+                html.Div(id="leaderboard-panel"),
             ],
         )),
 
@@ -1143,6 +1160,7 @@ def update_current_time_idx(day_idx, hour_idx, var_key):
     Output("field-map",        "figure"),
     Output("time-label",       "children"),
     Output("leaderboard-panel", "children"),
+    Output("risk-legend-panel", "children"),
     Input("variable-selector", "value"),
     Input("current-time-idx",  "data"),
     Input("unit-selector",     "value"),
@@ -1160,11 +1178,12 @@ def update_map(var_key, time_idx, unit):
         fig.update_layout(height=MAP_HEIGHT, paper_bgcolor="#0f172a",
                           plot_bgcolor="#0f172a",
                           xaxis=dict(visible=False), yaxis=dict(visible=False))
-        return fig, "No data", html.Div()
+        return fig, "No data", html.Div(), html.Div()
 
     lats = _GFS_DS.latitude.values
     lons = _GFS_DS.longitude.values
     leaderboard = _leaderboard_table(time_idx, unit, _et_utc_label(_GFS_DS.time.values[time_idx]))
+    legend = _risk_legend()
 
     if var_key == "risk":
         local_date = _to_et(_GFS_DS.time.values[time_idx]).date()
@@ -1177,7 +1196,7 @@ def update_map(var_key, time_idx, unit):
             data=data, lats=lats, lons=lons, var_key="risk", title=title,
             station_values=stn_vals, uirevision="conus_risk", unit=unit,
         )
-        return fig, day_label, leaderboard
+        return fig, day_label, leaderboard, legend
 
     vm     = VARIABLE_META.get(var_key, VARIABLE_META["t2m"])
     da     = _GFS_DS[var_key].isel(time=time_idx)
@@ -1198,7 +1217,7 @@ def update_map(var_key, time_idx, unit):
         uirevision     = f"conus_{var_key}",
         unit           = unit,
     )
-    return fig, ts_str, leaderboard
+    return fig, ts_str, leaderboard, legend
 
 
 @app.callback(
