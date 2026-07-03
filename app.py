@@ -599,17 +599,6 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                     name=f"{station_id} obs",
                     hovertemplate=f"Obs: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
                 ))
-        if "dew" in series:
-            dew = asos_df.dropna(subset=["dewpoint_c"]).copy()
-            if not dew.empty:
-                dew["valid_local"] = dew["valid_utc"].dt.tz_convert(tz)
-                fig.add_trace(go.Scatter(
-                    x=dew["valid_local"], y=_convert_array(dew["dewpoint_c"].values, unit), mode="markers",
-                    marker=dict(color="#22d3ee", size=4, opacity=0.70, symbol="square"),
-                    name=f"{station_id} Td obs",
-                    hovertemplate=f"Td obs: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
-                ))
-
     # Selected-time cursor — not literally "now": marks whatever day/time is
     # picked in the Day/Time dropdowns, which can be a future forecast day.
     # Distinct white so it doesn't blend with the amber threshold line.
@@ -886,19 +875,20 @@ app.layout = html.Div(
                             id="station-hint",
                             style={"fontSize": "12px", "color": "#475569"},
                         ),
-                        dcc.Checklist(
-                            id="series-selector",
-                            options=[
-                                {"label": " Feels Like (Heat Index)", "value": "hi"},
-                                {"label": " Actual Temp",             "value": "t2m"},
-                                {"label": " ASOS Temp obs",           "value": "obs"},
-                                {"label": " ASOS Dewpoint obs",       "value": "dew"},
-                            ],
-                            value=DEFAULT_SERIES, inline=True,
-                            inputStyle={"marginRight": "4px"},
-                            labelStyle={"marginRight": "14px", "fontSize": "12px",
-                                        "color": "#cbd5e1"},
-                        ),
+                        html.Div(id="series-selector-wrap", style={"display": "none"}, children=[
+                            dcc.Checklist(
+                                id="series-selector",
+                                options=[
+                                    {"label": " Feels Like (Heat Index)", "value": "hi"},
+                                    {"label": " Actual Temp",             "value": "t2m"},
+                                    {"label": " ASOS Temp obs",           "value": "obs"},
+                                ],
+                                value=DEFAULT_SERIES, inline=True,
+                                inputStyle={"marginRight": "4px"},
+                                labelStyle={"marginRight": "14px", "fontSize": "12px",
+                                            "color": "#cbd5e1"},
+                            ),
+                        ]),
                     ],
                 ),
                 html.Div([
@@ -954,6 +944,14 @@ def update_hour_options(day_first_idx):
 )
 def toggle_hour_dropdown(var_key):
     return {"display": "none"} if var_key == "risk" else {}
+
+
+@app.callback(
+    Output("series-selector-wrap", "style"),
+    Input("selected-station", "data"),
+)
+def toggle_series_selector(station_id):
+    return {} if station_id else {"display": "none"}
 
 
 @app.callback(
