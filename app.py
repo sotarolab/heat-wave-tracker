@@ -24,7 +24,7 @@ import numpy as np
 import pandas as pd
 import plotly.graph_objects as go
 from PIL import Image
-from dash import Dash, dcc, html, Input, Output, State, ctx
+from dash import Dash, dcc, html, Input, Output, State, ctx, ALL, no_update
 
 from src.heat.gfs_conus import load_or_fetch, DEFAULT_OUT
 from src.heat.stations  import MAJOR_CONUS_STATIONS, get_station
@@ -257,6 +257,24 @@ def _risk_color(v, categories: list[tuple]) -> str:
     return NO_RISK_COLOR
 
 
+def _size_for_values(values, vmin: float, vmax: float,
+                     min_size: float = 6.0, max_size: float = 18.0) -> list[float]:
+    """Marker size scaled linearly with value, so hotter stations read as
+    bigger dots too, not just a different color - a second, redundant
+    channel that's easier to scan at a glance and doesn't rely on color
+    perception alone."""
+    span = vmax - vmin
+    sizes = []
+    for v in values:
+        if v is None or (isinstance(v, float) and math.isnan(v)):
+            sizes.append(min_size)
+            continue
+        frac = (v - vmin) / span if span else 0.5
+        frac = max(0.0, min(1.0, frac))
+        sizes.append(min_size + frac * (max_size - min_size))
+    return sizes
+
+
 def _bbox_zoom_center(bbox: list, width_px: float = PAGE_MAX_WIDTH - 48,
                       height_px: float = MAP_HEIGHT) -> tuple:
     """
@@ -378,17 +396,21 @@ def _mapbox_figure(
     stn_text = [f"{s['id']} - {s['name']} ({s['state']})" for s in MAJOR_CONUS_STATIONS]
 
     if station_values is not None and is_risk:
+        size_vmin, size_vmax = categories[0][0] - 20, categories[-1][0] + 5
         marker_kwargs = dict(color=[_risk_color(v, categories) for v in station_values],
-                             colorscale=None, cmin=None, cmax=None)
+                             colorscale=None, cmin=None, cmax=None,
+                             size=_size_for_values(station_values, size_vmin, size_vmax))
     elif station_values is not None:
         marker_kwargs = dict(color=station_values, colorscale=vm["plotly"],
-                             cmin=vmin, cmax=vmax)
+                             cmin=vmin, cmax=vmax,
+                             size=_size_for_values(station_values, vmin, vmax))
     else:
-        marker_kwargs = dict(color=NO_DATA_COLOR, colorscale=None, cmin=None, cmax=None)
+        marker_kwargs = dict(color=NO_DATA_COLOR, colorscale=None, cmin=None, cmax=None,
+                             size=9)
 
     fig.add_trace(go.Scattermapbox(
         lat=stn_lats, lon=stn_lons, mode="markers",
-        marker=dict(size=9, showscale=False, opacity=0.90, **marker_kwargs),
+        marker=dict(showscale=False, opacity=0.90, **marker_kwargs),
         customdata=stn_ids,
         hovertext=stn_text,
         hoverinfo="text",
@@ -460,7 +482,8 @@ def _get_station_risk_values(time_idxs: list[int]) -> list[float] | None:
     return vals
 
 
-def _leaderboard_table(time_idx: int, unit: str, top_n: int = 15) -> html.Div:
+def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
+                       top_n: int = 15) -> html.Div:
     """
     Ranked table of the hottest stations right now, by forecasted Heat Index.
     Ranked by *current forecasted severity*, not historical records - this app
@@ -499,23 +522,53 @@ def _leaderboard_table(time_idx: int, unit: str, top_n: int = 15) -> html.Div:
                 break
         rows.append(html.Div([
             html.Span(str(i), style={"width": "26px", "color": "#64748b"}),
-            html.Span(f"{s['name']} ({s['state']})", style={"flex": "1", "color": "#e2e8f0"}),
+            html.Button(
+                f"{s['name']} ({s['state']})",
+                id={"type": "leaderboard-station", "index": s["id"]},
+                n_clicks=0,
+                title="Click to view this station's forecast + observations",
+                style={"flex": "1", "textAlign": "left", "color": "#e2e8f0",
+                       "background": "none", "border": "none", "padding": 0,
+                       "font": "inherit", "cursor": "pointer",
+                       "textDecoration": "underline", "textDecorationColor": "#334155"},
+            ),
             html.Span(f"{num_fmt}{unit_label}",
                       style={"width": "84px", "textAlign": "right",
                              "color": "#f8fafc", "fontWeight": "600"}),
-            html.Span(html.Span(cat_label, style={
+            html.Span(html.Span(cat_label, title=RISK_DESCRIPTIONS.get(cat_label, ""), style={
                 "backgroundColor": cat_color, "color": "#0f172a", "padding": "2px 8px",
                 "borderRadius": "999px", "fontSize": "10px", "fontWeight": "700",
+                "cursor": "help",
             }), style={"width": "130px", "textAlign": "right"}),
         ], style={"display": "flex", "alignItems": "center", "padding": "6px 10px",
                   "fontSize": "12px", "borderBottom": "1px solid #1e293b"}))
 
+    legend_order = [(NO_RISK_LABEL, NO_RISK_COLOR)] + [(label, color) for _, label, color in RISK_CATEGORIES_F]
+    legend = html.Div([
+        html.Span([
+            html.Span(label, style={
+                "backgroundColor": color, "color": "#0f172a", "padding": "2px 8px",
+                "borderRadius": "999px", "fontSize": "10px", "fontWeight": "700",
+                "marginRight": "6px",
+            }),
+            html.Span(RISK_DESCRIPTIONS.get(label, ""), style={"color": "#64748b"}),
+        ], style={"marginRight": "18px", "whiteSpace": "nowrap"})
+        for label, color in legend_order
+    ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px 0",
+              "fontSize": "11px", "marginTop": "10px", "paddingTop": "10px",
+              "borderTop": "1px solid #334155"})
+
+    subtitle = "Ranked by forecasted Heat Index"
+    if time_label:
+        subtitle += f"  ·  {time_label}"
+
     return html.Div([
         html.H3("Hottest Cities Right Now",
                 style={"fontSize": "14px", "color": "#f8fafc", "margin": "0 0 4px 0"}),
-        html.Div("Ranked by forecasted Heat Index for the selected day/time.",
+        html.Div(subtitle,
                  style={"fontSize": "11px", "color": "#64748b", "marginBottom": "8px"}),
         html.Div(rows),
+        legend,
     ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "12px 14px",
               "marginTop": "16px"})
 
@@ -1011,7 +1064,7 @@ def update_map(var_key, time_idx, unit):
 
     lats = _GFS_DS.latitude.values
     lons = _GFS_DS.longitude.values
-    leaderboard = _leaderboard_table(time_idx, unit)
+    leaderboard = _leaderboard_table(time_idx, unit, _et_utc_label(_GFS_DS.time.values[time_idx]))
 
     if var_key == "risk":
         local_date = _to_et(_GFS_DS.time.values[time_idx]).date()
@@ -1073,9 +1126,10 @@ def update_risk_caption(var_key):
 
 
 @app.callback(
-    Output("selected-station", "data"),
+    Output("selected-station", "data", allow_duplicate=True),
     Input("field-map", "clickData"),
     State("selected-station", "data"),
+    prevent_initial_call=True,
 )
 def select_station(clickData, current):
     if not clickData:
@@ -1088,6 +1142,18 @@ def select_station(clickData, current):
     if cdata and isinstance(cdata, str) and cdata.startswith("K"):
         return cdata
     return current
+
+
+@app.callback(
+    Output("selected-station", "data", allow_duplicate=True),
+    Input({"type": "leaderboard-station", "index": ALL}, "n_clicks"),
+    prevent_initial_call=True,
+)
+def select_station_from_leaderboard(_n_clicks):
+    triggered = ctx.triggered_id
+    if isinstance(triggered, dict) and triggered.get("type") == "leaderboard-station":
+        return triggered["index"]
+    return no_update
 
 
 @app.callback(
