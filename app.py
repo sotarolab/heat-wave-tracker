@@ -899,7 +899,7 @@ app.layout = html.Div(
             style={"padding": "16px 24px 24px 24px", "borderTop": "1px solid #1e293b",
                    "textAlign": "center", "fontSize": "11px", "color": "#475569"},
             children=[
-                "Built by Sebastian Otarola-Bustos, PhD  ·  ",
+                "Built by Sebastian Otarola-Bustos, PhD  ·  Rockville, MD  ·  ",
                 html.A("sfotarol@gmail.com", href="mailto:sfotarol@gmail.com",
                       style={"color": "#64748b", "textDecoration": "underline"}),
             ],
