@@ -519,11 +519,13 @@ def _leaderboard_table(time_idx: int, unit: str, top_n: int = 15) -> html.Div:
 # ── station panel figure ──────────────────────────────────────────────────────
 
 DEFAULT_METRICS = ["hi", "t2m"]
-DEFAULT_SOURCES = ["forecast", "observed"]
 
-# Color encodes the metric, consistently for both forecast lines and
-# observed points; line-vs-dots encodes the source. Two independent,
-# orthogonal channels instead of one flat list of options.
+# Color encodes the metric. Actual Temp gets both a past (observed) and
+# future (forecast) segment, split at "now" so they never overlap. Feels
+# Like only ever shows the forward-looking forecast — there's no need to
+# compare it against a computed "observed feels like," which is a derived
+# quantity most people don't intuitively reason about, and doubled the
+# number of things on screen for no real benefit.
 _METRIC_META = {
     "t2m": {"label": "Actual Temp", "color": "#38bdf8", "width": 1.4, "dash": "dot"},
     "hi":  {"label": "Feels Like",  "color": "#fb923c", "width": 2.8, "dash": "solid"},
@@ -532,15 +534,12 @@ _METRIC_META = {
 
 def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                           time_idx: int, unit: str = "C",
-                          metrics: list[str] | None = None,
-                          sources: list[str] | None = None) -> go.Figure:
+                          metrics: list[str] | None = None) -> go.Figure:
     """GFS forecast + ASOS observations for one station, in the station's own
-    local time zone and display unit. `metrics` (t2m/hi) and `sources`
-    (forecast/observed) are independent — any combination can be shown."""
+    local time zone and display unit. `metrics` (t2m/hi) controls which
+    quantities are plotted."""
     if metrics is None:
         metrics = DEFAULT_METRICS
-    if sources is None:
-        sources = DEFAULT_SOURCES
     stn = get_station(station_id)
     if stn is None:
         return _station_placeholder(f"Station {station_id} not in catalog.")
@@ -571,20 +570,17 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     cursor_ts = _to_local(pd.DatetimeIndex([times[min(int(time_idx or 0), len(times) - 1)]]))[0]
     tz_abbr   = cursor_ts.strftime("%Z")
 
-    # Observed Heat Index isn't in the raw ASOS feed — compute it from real
-    # observed temp+dewpoint with the same NWS formula used for the forecast,
-    # so "Feels Like (Observed)" is an actual measurement, not a model value.
+    # ASOS obs run up to whenever they were fetched (real "now"), which is
+    # usually hours after the GFS init time. "Now" is the natural dividing
+    # line between what actually happened (observed) and what's predicted
+    # (forecast) — forecast lines only ever show the future side of it.
     obs_local = pd.DataFrame()
+    now_ts = None
     if not asos_df.empty:
         obs_local = asos_df.dropna(subset=["temp_c"]).copy()
         obs_local["valid_local"] = obs_local["valid_utc"].dt.tz_convert(tz)
-        has_td = obs_local["dewpoint_c"].notna()
-        obs_local["hi_c"] = np.nan
-        if has_td.any():
-            obs_local.loc[has_td, "hi_c"] = heat_index_array(
-                obs_local.loc[has_td, "temp_c"].values,
-                obs_local.loc[has_td, "dewpoint_c"].values,
-            )
+        if not obs_local.empty:
+            now_ts = obs_local["valid_local"].max()
 
     fig = go.Figure()
 
@@ -592,29 +588,28 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         if key not in metrics:
             continue
         meta = _METRIC_META[key]
+        line_series = gfs_series[key]
+        if now_ts is not None:
+            line_series = line_series[line_series.index > now_ts]
 
-        if "forecast" in sources:
+        fig.add_trace(go.Scatter(
+            x=line_series.index, y=_convert_array(line_series.values, unit),
+            mode="lines",
+            line=dict(color=meta["color"], width=meta["width"], dash=meta["dash"]),
+            name=f"{meta['label']} (Forecast)",
+            hovertemplate=f"{meta['label']} (Forecast): %{{y:.1f}}{unit_label}  "
+                          f"%{{x|%b %d %I:%M %p}}<extra></extra>",
+        ))
+
+        if key == "t2m" and not obs_local.empty:
             fig.add_trace(go.Scatter(
-                x=gfs_series[key].index, y=_convert_array(gfs_series[key].values, unit),
-                mode="lines",
-                line=dict(color=meta["color"], width=meta["width"], dash=meta["dash"]),
-                name=f"{meta['label']} (Forecast)",
-                hovertemplate=f"{meta['label']} (Forecast): %{{y:.1f}}{unit_label}  "
+                x=obs_local["valid_local"], y=_convert_array(obs_local["temp_c"].values, unit),
+                mode="markers",
+                marker=dict(color=meta["color"], size=5, opacity=0.85),
+                name=f"{meta['label']} (Observed)",
+                hovertemplate=f"{meta['label']} (Observed): %{{y:.1f}}{unit_label}  "
                               f"%{{x|%b %d %I:%M %p}}<extra></extra>",
             ))
-
-        if "observed" in sources and not obs_local.empty:
-            col = "temp_c" if key == "t2m" else "hi_c"
-            pts = obs_local.dropna(subset=[col])
-            if not pts.empty:
-                fig.add_trace(go.Scatter(
-                    x=pts["valid_local"], y=_convert_array(pts[col].values, unit),
-                    mode="markers",
-                    marker=dict(color=meta["color"], size=5, opacity=0.85),
-                    name=f"{meta['label']} (Observed)",
-                    hovertemplate=f"{meta['label']} (Observed): %{{y:.1f}}{unit_label}  "
-                                  f"%{{x|%b %d %I:%M %p}}<extra></extra>",
-                ))
 
     # Selected-time cursor — not literally "now": marks whatever day/time is
     # picked in the Day/Time dropdowns, which can be a future forecast day.
@@ -642,7 +637,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     # a hard line, not a faint gridline.
     x0_dt = gfs_series["t2m"].index[0]
     x1_dt = gfs_series["t2m"].index[-1]
-    if "observed" in sources and not obs_local.empty:
+    if not obs_local.empty:
         x0_dt = min(x0_dt, obs_local["valid_local"].min())
     x0, x1 = x0_dt.isoformat(), x1_dt.isoformat()
     for thresh_c, desc, color, requires in [
@@ -908,20 +903,6 @@ app.layout = html.Div(
                                                 "color": "#cbd5e1"},
                                 ),
                             ]),
-                            html.Div([
-                                html.Span("Source  ", style={"fontSize": "11px", "color": "#64748b"}),
-                                dcc.Checklist(
-                                    id="source-selector",
-                                    options=[
-                                        {"label": " Model Forecast", "value": "forecast"},
-                                        {"label": " Observed (ASOS)", "value": "observed"},
-                                    ],
-                                    value=DEFAULT_SOURCES, inline=True,
-                                    inputStyle={"marginRight": "4px"},
-                                    labelStyle={"marginRight": "14px", "fontSize": "12px",
-                                                "color": "#cbd5e1"},
-                                ),
-                            ]),
                         ]),
                     ],
                 ),
@@ -1112,9 +1093,8 @@ def select_station(clickData, current):
     Input("current-time-idx", "data"),
     Input("unit-selector",    "value"),
     Input("metric-selector",  "value"),
-    Input("source-selector",  "value"),
 )
-def update_station_panel(station_id, time_idx, unit, metrics, sources):
+def update_station_panel(station_id, time_idx, unit, metrics):
     time_idx = int(time_idx or 0)
 
     if not station_id:
@@ -1142,8 +1122,7 @@ def update_station_panel(station_id, time_idx, unit, metrics, sources):
             _asos_cache[station_id] = asos_df
         print(f"{len(asos_df)} obs")
 
-    fig   = _build_station_figure(station_id, asos_df, time_idx, unit=unit,
-                                  metrics=metrics, sources=sources)
+    fig   = _build_station_figure(station_id, asos_df, time_idx, unit=unit, metrics=metrics)
     hint  = (f"Station: {station_id} — {stn['name']} ({stn['state']})  "
              f"·  {len(asos_df)} recent ASOS obs  ·  Click another station to switch")
 
