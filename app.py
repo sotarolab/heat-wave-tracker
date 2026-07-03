@@ -395,15 +395,22 @@ def _mapbox_figure(
     stn_ids  = [s["id"]   for s in MAJOR_CONUS_STATIONS]
     stn_text = [f"{s['id']} - {s['name']} ({s['state']})" for s in MAJOR_CONUS_STATIONS]
 
+    # Size uses today's actual min/max, not the fixed color-scale range -
+    # otherwise a typical day's spread (e.g. 75-105F within a 50-113F color
+    # range) only occupies the middle of the size range and barely reads as
+    # different sizes at all.
+    valid_vals = [v for v in (station_values or [])
+                 if v is not None and not (isinstance(v, float) and math.isnan(v))]
+    size_lo, size_hi = (min(valid_vals), max(valid_vals)) if valid_vals else (0.0, 1.0)
+
     if station_values is not None and is_risk:
-        size_vmin, size_vmax = categories[0][0] - 20, categories[-1][0] + 5
         marker_kwargs = dict(color=[_risk_color(v, categories) for v in station_values],
                              colorscale=None, cmin=None, cmax=None,
-                             size=_size_for_values(station_values, size_vmin, size_vmax))
+                             size=_size_for_values(station_values, size_lo, size_hi))
     elif station_values is not None:
         marker_kwargs = dict(color=station_values, colorscale=vm["plotly"],
                              cmin=vmin, cmax=vmax,
-                             size=_size_for_values(station_values, vmin, vmax))
+                             size=_size_for_values(station_values, size_lo, size_hi))
     else:
         marker_kwargs = dict(color=NO_DATA_COLOR, colorscale=None, cmin=None, cmax=None,
                              size=9)
