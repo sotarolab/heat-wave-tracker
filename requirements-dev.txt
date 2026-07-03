@@ -1,0 +1,6 @@
+# Test-only dependencies. Deliberately not `-r requirements.txt` -
+# tests/test_compute.py only exercises pure-numpy code, so CI doesn't need
+# to install the heavy GFS-fetching stack (cfgrib/eccodes/herbie-data) just
+# to run it.
+numpy
+pytest>=8.0
