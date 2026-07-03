@@ -873,7 +873,7 @@ def _climate_context(station_id: str, unit: str) -> html.Div:
 
 app    = Dash(__name__)
 server = app.server   # Gunicorn entry point
-app.title = "US Heat Wave Tracker"
+app.title = "2026 US Heat Wave Tracker"
 
 _SOCIAL_DESCRIPTION = (
     "Live GFS forecast - Heat Index, risk levels, and real ASOS observations "
@@ -890,12 +890,12 @@ app.index_string = f"""<!DOCTYPE html>
         <title>{{%title%}}</title>
         {{%favicon%}}
         {{%css%}}
-        <meta property="og:title" content="US Heat Wave Tracker">
+        <meta property="og:title" content="2026 US Heat Wave Tracker">
         <meta property="og:description" content="{_SOCIAL_DESCRIPTION}">
         <meta property="og:type" content="website">
         <meta property="og:image" content="/assets/social_preview.png">
         <meta name="twitter:card" content="summary_large_image">
-        <meta name="twitter:title" content="US Heat Wave Tracker">
+        <meta name="twitter:title" content="2026 US Heat Wave Tracker">
         <meta name="twitter:description" content="{_SOCIAL_DESCRIPTION}">
         <meta name="twitter:image" content="/assets/social_preview.png">
         <meta name="description" content="{_SOCIAL_DESCRIPTION}">
@@ -939,7 +939,7 @@ app.layout = html.Div(
                    "display": "flex", "alignItems": "center",
                    "justifyContent": "space-between"},
             children=[
-                html.H1("US Heat Wave Tracker",
+                html.H1("2026 US Heat Wave Tracker",
                     style={"color": "#f8fafc", "margin": 0,
                            "fontSize": "20px", "fontWeight": "600"}),
                 html.Span(_init_label,
@@ -1157,7 +1157,7 @@ def update_map(var_key, time_idx, unit):
         idxs = _day_time_indices(local_date)
         data = _GFS_DS["hi"].isel(time=idxs).max(dim="time").values
         day_label = _to_et(_GFS_DS.time.values[time_idx]).strftime("%A, %b %d")
-        title = f"US Heat Wave  ·  Risk Level (daily max Heat Index)  |  {day_label}"
+        title = f"2026 US Heat Wave  ·  Risk Level (daily max Heat Index)  |  {day_label}"
         stn_vals = _get_station_risk_values(idxs)
         fig = _mapbox_figure(
             data=data, lats=lats, lons=lons, var_key="risk", title=title,
@@ -1170,7 +1170,7 @@ def update_map(var_key, time_idx, unit):
     data   = da.values
 
     ts_str = _et_utc_label(_GFS_DS.time.values[time_idx])
-    title  = f"US Heat Wave  ·  {vm['label']}  |  {ts_str}"
+    title  = f"2026 US Heat Wave  ·  {vm['label']}  |  {ts_str}"
 
     stn_vals = _get_station_values(var_key, time_idx)
 
