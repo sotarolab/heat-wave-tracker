@@ -898,11 +898,7 @@ app.layout = html.Div(
         _page_section(None, None, html.Div(
             style={"padding": "16px 24px 24px 24px", "borderTop": "1px solid #1e293b",
                    "textAlign": "center", "fontSize": "11px", "color": "#475569"},
-            children=[
-                "Built by Sebastian Otarola-Bustos, PhD  ·  Rockville, MD  ·  ",
-                html.A("sfotarol@gmail.com", href="mailto:sfotarol@gmail.com",
-                      style={"color": "#64748b", "textDecoration": "underline"}),
-            ],
+            children="Built by Sebastian Otarola-Bustos, PhD  ·  Rockville, MD",
         )),
 
         # ── hidden components ─────────────────────────────────────────────────
