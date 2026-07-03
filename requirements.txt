@@ -1,0 +1,15 @@
+dash>=2.17
+plotly>=5.22
+numpy
+pandas
+xarray
+matplotlib
+Pillow
+requests
+herbie-data
+cfgrib
+eccodes
+scipy
+scikit-image
+gunicorn
+tzdata
