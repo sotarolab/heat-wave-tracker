@@ -582,7 +582,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                 obs["valid_local"] = obs["valid_utc"].dt.tz_convert(tz)
                 fig.add_trace(go.Scatter(
                     x=obs["valid_local"], y=_convert_array(obs["temp_c"].values, unit), mode="markers",
-                    marker=dict(color="#60a5fa", size=5, opacity=0.85),
+                    marker=dict(color="#94a3b8", size=5, opacity=0.85),
                     name=f"{station_id} obs",
                     hovertemplate=f"Obs: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
                 ))
@@ -625,7 +625,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             x0_dt = min(x0_dt, obs_local.min())
     x0, x1 = x0_dt.isoformat(), x1_dt.isoformat()
     for thresh_c, desc, color, requires in [
-        (32.0, "(NWS Excessive Heat)", "rgba(239,68,68,0.65)", "hi"),
+        (32.0, "(NWS Excessive Heat)", "rgba(241,245,249,0.75)", "hi"),
     ]:
         if requires not in series:
             continue

@@ -4,21 +4,23 @@ scripts/fetch_gfs_conus.py
 Pre-fetch GFS CONUS data for the heat wave tracker.
 
 Downloads T2m + Td2m from NOAA AWS via Herbie, computes heat index, and
-saves to data/conus_heat_tracker.nc. Defaults to hourly resolution — GFS's
-0.25° product natively publishes hourly output through F120, so this is
-"free" (no extra model runs), and gives the Day/Time dropdowns real
-hour-by-hour granularity instead of just 4 slots/day.
+saves to data/conus_heat_tracker.nc. Defaults to every 2 hours (61 steps,
+~40 MB) — a middle ground between the original 4 slots/day and full hourly
+(121 steps, ~80 MB, over GitHub's 50 MB soft file-size limit).
 
 This script runs locally. Commit the output file so Render serves from it
 without a cold-start download.
 
 Usage
 -----
-    # Latest available GFS cycle (default: 121 steps, F000–F120 hourly)
+    # Latest available GFS cycle (default: 61 steps, F000–F120 every 2 h)
     python scripts/fetch_gfs_conus.py
 
     # Specific init time
     python scripts/fetch_gfs_conus.py --init "2026-07-02 00:00"
+
+    # Full hourly (121 steps, ~80 MB — exceeds GitHub's 50 MB soft limit)
+    python scripts/fetch_gfs_conus.py --step 1
 
     # Coarser/faster fetch (21 steps, F000–F120 every 6 h) — smaller file
     python scripts/fetch_gfs_conus.py --step 6
@@ -48,8 +50,8 @@ def main():
         help="Forecast horizon in hours (default: 120).",
     )
     parser.add_argument(
-        "--step", type=int, default=1,
-        help="Interval between lead times in hours (default: 1, true hourly).",
+        "--step", type=int, default=2,
+        help="Interval between lead times in hours (default: 2).",
     )
     parser.add_argument(
         "--out", default=str(DEFAULT_OUT), metavar="PATH",
