@@ -13,4 +13,4 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY . .
 
 EXPOSE 8051
-CMD ["gunicorn", "--workers=1", "--bind=0.0.0.0:8051", "--timeout=120", "app:server"]
+CMD ["gunicorn", "--worker-class=gthread", "--workers=1", "--threads=4", "--bind=0.0.0.0:8051", "--timeout=120", "app:server"]
