@@ -1010,7 +1010,6 @@ app.layout = html.Div(
                     style={"display": "block", "textAlign": "center",
                            "fontSize": "13px", "color": "#94a3b8",
                            "margin": "8px 0"}),
-                html.Div(id="risk-caption"),
                 html.Div(id="leaderboard-panel"),
             ],
         )),
@@ -1186,31 +1185,6 @@ def update_map(var_key, time_idx, unit):
         unit           = unit,
     )
     return fig, ts_str, leaderboard
-
-
-@app.callback(
-    Output("risk-caption", "children"),
-    Input("variable-selector", "value"),
-)
-def update_risk_caption(var_key):
-    """Plain-language legend under the map - what each risk color actually means."""
-    if var_key != "risk":
-        return []
-    order = [(NO_RISK_LABEL, NO_RISK_COLOR)] + [(label, color) for _, label, color in RISK_CATEGORIES_F]
-    chips = []
-    for label, color in order:
-        chips.append(html.Span([
-            html.Span(label, style={
-                "backgroundColor": color, "color": "#0f172a", "padding": "2px 8px",
-                "borderRadius": "999px", "fontWeight": "700", "marginRight": "6px",
-                "fontSize": "11px",
-            }),
-            html.Span(RISK_DESCRIPTIONS.get(label, ""), style={"color": "#94a3b8"}),
-        ], style={"marginRight": "20px", "whiteSpace": "nowrap"}))
-    chips.append(_risk_source_link())
-    return html.Div(chips, style={"display": "flex", "flexWrap": "wrap",
-                                  "gap": "6px 0", "fontSize": "11px",
-                                  "padding": "8px 0 0 0"})
 
 
 @app.callback(
