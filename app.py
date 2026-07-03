@@ -684,6 +684,17 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         obs_local["valid_local"] = obs_local["valid_utc"].dt.tz_convert(tz)
         if not obs_local.empty:
             now_ts = obs_local["valid_local"].max()
+            # Real observed Feels Like isn't in the raw ASOS feed - compute
+            # it from actual observed temp+dewpoint with the same NWS
+            # formula used for the forecast. This is a validated fact about
+            # what already happened, not a model output.
+            has_td = obs_local["dewpoint_c"].notna()
+            obs_local["hi_c"] = float("nan")
+            if has_td.any():
+                obs_local.loc[has_td, "hi_c"] = heat_index_array(
+                    obs_local.loc[has_td, "temp_c"].values,
+                    obs_local.loc[has_td, "dewpoint_c"].values,
+                )
 
     fig = go.Figure()
 
@@ -704,15 +715,18 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                           f"%{{x|%b %d %I:%M %p}}<extra></extra>",
         ))
 
-        if key == "t2m" and not obs_local.empty:
-            fig.add_trace(go.Scatter(
-                x=obs_local["valid_local"], y=_convert_array(obs_local["temp_c"].values, unit),
-                mode="markers",
-                marker=dict(color=meta["color"], size=5, opacity=0.85),
-                name=f"{meta['label']} (Observed)",
-                hovertemplate=f"{meta['label']} (Observed): %{{y:.1f}}{unit_label}  "
-                              f"%{{x|%b %d %I:%M %p}}<extra></extra>",
-            ))
+        obs_col = {"t2m": "temp_c", "hi": "hi_c"}[key]
+        if not obs_local.empty:
+            obs_points = obs_local.dropna(subset=[obs_col])
+            if not obs_points.empty:
+                fig.add_trace(go.Scatter(
+                    x=obs_points["valid_local"], y=_convert_array(obs_points[obs_col].values, unit),
+                    mode="markers",
+                    marker=dict(color=meta["color"], size=5, opacity=0.85),
+                    name=f"{meta['label']} (Observed)",
+                    hovertemplate=f"{meta['label']} (Observed): %{{y:.1f}}{unit_label}  "
+                                  f"%{{x|%b %d %I:%M %p}}<extra></extra>",
+                ))
 
     # "Now" cursor - the real observed/forecast boundary, not the day/time
     # picked in the Day/Time dropdowns (that's shown in the title instead).
