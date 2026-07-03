@@ -818,18 +818,45 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     return fig
 
 
-def _hero_tile(station_id: str, time_idx: int, unit: str) -> html.Div:
-    """Big 'feels like' number + plain-language risk category for the
-    selected station/time - the headline fact, ahead of the line chart."""
+_HERO_OBS_FRESHNESS = pd.Timedelta(hours=2)
+
+
+def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame) -> html.Div:
+    """
+    Big 'feels like' number + plain-language risk category - the headline
+    fact, ahead of the line chart.
+
+    Only kicks in when the selected day/time is itself close to "now" (the
+    default selection) - the forecast can be hours away from "now" and
+    diverge sharply (e.g. a front arriving later this evening), and the
+    headline shouldn't show a calmer forecasted number while it's actually
+    dangerously hot outside right now. If the user has navigated to a
+    different day/time, that explicit choice always wins and shows the
+    forecast for it, observation or not.
+    """
     stn = get_station(station_id)
     if stn is None or _GFS_DS is None:
         return html.Div()
 
     tz  = ZoneInfo(stn.get("tz", "America/New_York"))
     idx = min(int(time_idx or 0), len(_GFS_DS.time) - 1)
-    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
-    hi_c = float(_GFS_DS["hi"].sel(**sel).isel(time=idx).values)
-    ts_local = pd.Timestamp(_GFS_DS.time.values[idx]).tz_localize("UTC").tz_convert(tz)
+    selected_utc = pd.Timestamp(_GFS_DS.time.values[idx]).tz_localize("UTC")
+    is_near_now  = abs(selected_utc - pd.Timestamp.now(tz="UTC")) <= _HERO_OBS_FRESHNESS
+
+    hi_c = None
+    if is_near_now and not asos_df.empty:
+        obs = asos_df.dropna(subset=["temp_c", "dewpoint_c"])
+        if not obs.empty:
+            latest = obs.loc[obs["valid_utc"].idxmax()]
+            if pd.Timestamp.now(tz="UTC") - latest["valid_utc"] <= _HERO_OBS_FRESHNESS:
+                hi_c = float(heat_index_array([latest["temp_c"]], [latest["dewpoint_c"]])[0])
+                time_label = "Right now"
+
+    if hi_c is None:
+        sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+        hi_c = float(_GFS_DS["hi"].sel(**sel).isel(time=idx).values)
+        ts_local = selected_utc.tz_convert(tz)
+        time_label = f"{ts_local.strftime('%a %I:%M %p').replace(' 0', ' ')} (forecast)"
 
     unit_label = _unit_label(unit)
     num_fmt = f"{_convert(hi_c, unit):.0f}" if unit == "F" else f"{_convert(hi_c, unit):.1f}"
@@ -849,7 +876,7 @@ def _hero_tile(station_id: str, time_idx: int, unit: str) -> html.Div:
             html.Div([
                 html.Span(f"{num_fmt}{unit_label}",
                           style={"fontSize": "42px", "fontWeight": "700", "color": "#f8fafc"}),
-                html.Span(f"  Feels like  ·  {ts_local.strftime('%a %I:%M %p').replace(' 0', ' ')}",
+                html.Span(f"  Feels like  ·  {time_label}",
                           style={"fontSize": "13px", "color": "#94a3b8", "marginLeft": "8px"}),
             ]),
             html.Div([
@@ -1314,7 +1341,7 @@ def update_station_panel(station_id, time_idx, unit, metrics):
              f"·  {len(asos_df)} recent ASOS obs  ·  Click another station to switch")
 
     panel = html.Div([
-        _hero_tile(station_id, time_idx, unit),
+        _hero_tile(station_id, time_idx, unit, asos_df),
         _climate_context(station_id, unit),
         dcc.Graph(figure=fig, config={"displayModeBar": False}),
     ])
