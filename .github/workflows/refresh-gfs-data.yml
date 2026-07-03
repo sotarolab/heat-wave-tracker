@@ -1,0 +1,40 @@
+name: Refresh GFS forecast data
+
+on:
+  schedule:
+    # Every 6h, matching GFS's 00Z/06Z/12Z/18Z cycles (~4-5h publish lag)
+    - cron: "30 */6 * * *"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install eccodes (required by cfgrib)
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libeccodes-dev libeccodes-tools
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      - name: Fetch latest GFS forecast
+        run: python scripts/fetch_gfs_conus.py --overwrite
+
+      - name: Commit and push if data changed
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/conus_heat_tracker.nc
+          git diff --cached --quiet && echo "No data change" || \
+            (git commit -m "Auto-refresh GFS forecast data" && git push)
