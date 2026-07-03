@@ -349,7 +349,7 @@ def _mapbox_figure(
             fig.add_trace(go.Scattermapbox(
                 lat=[89.0], lon=[0.0], mode="markers",
                 marker=dict(size=10, color=color),
-                name=label, showlegend=True, hoverinfo="none", opacity=0,
+                name=label, showlegend=True, hoverinfo="none",
             ))
     else:
         # Off-screen ghost point carries the continuous colorbar
