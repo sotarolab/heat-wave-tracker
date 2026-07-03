@@ -189,9 +189,24 @@ def _day_time_indices(date_) -> list[int]:
     return [i for i, t in enumerate(_GFS_DS.time.values) if _to_et(t).date() == date_]
 
 
+def _now_et() -> pd.Timestamp:
+    return pd.Timestamp.now(tz=_DISPLAY_TZ)
+
+
 def _hour_options_for_day(day_first_idx: int) -> list[dict]:
+    """
+    Hour options for the day containing `day_first_idx`. For today, past
+    hours are dropped so the first (default) option is the closest one at
+    or after the current time - you can't pick an hour that's already gone.
+    Falls back to the full day if that filter would leave nothing (e.g. the
+    day's last GFS step is already behind "now" late at night).
+    """
     date_ = _to_et(_GFS_DS.time.values[int(day_first_idx)]).date()
     idxs = _day_time_indices(date_)
+    if date_ == _now_et().date():
+        upcoming = [i for i in idxs if _to_et(_GFS_DS.time.values[i]) >= _now_et()]
+        if upcoming:
+            idxs = upcoming
     return [
         {"label": _to_et(_GFS_DS.time.values[i]).strftime("%I:%M %p ET"), "value": i}
         for i in idxs
