@@ -29,6 +29,7 @@ from dash import Dash, dcc, html, Input, Output, State, ctx
 from src.heat.gfs_conus import load_or_fetch, DEFAULT_OUT
 from src.heat.stations  import MAJOR_CONUS_STATIONS, get_station
 from src.heat.asos      import fetch_station_obs
+from src.heat.compute   import heat_index_array
 
 
 # ── constants ─────────────────────────────────────────────────────────────────
@@ -517,17 +518,29 @@ def _leaderboard_table(time_idx: int, unit: str, top_n: int = 15) -> html.Div:
 
 # ── station panel figure ──────────────────────────────────────────────────────
 
-DEFAULT_SERIES = ["hi", "t2m", "obs"]
+DEFAULT_METRICS = ["hi", "t2m"]
+DEFAULT_SOURCES = ["forecast", "observed"]
+
+# Color encodes the metric, consistently for both forecast lines and
+# observed points; line-vs-dots encodes the source. Two independent,
+# orthogonal channels instead of one flat list of options.
+_METRIC_META = {
+    "t2m": {"label": "Actual Temp", "color": "#38bdf8", "width": 1.4, "dash": "dot"},
+    "hi":  {"label": "Feels Like",  "color": "#fb923c", "width": 2.8, "dash": "solid"},
+}
 
 
 def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                           time_idx: int, unit: str = "C",
-                          series: list[str] | None = None) -> go.Figure:
-    """GFS forecast (T2m, HI) + ASOS observations for one station, in the
-    station's own local time zone and the selected display unit. `series`
-    controls which of t2m/hi/obs/dew traces are drawn."""
-    if series is None:
-        series = DEFAULT_SERIES
+                          metrics: list[str] | None = None,
+                          sources: list[str] | None = None) -> go.Figure:
+    """GFS forecast + ASOS observations for one station, in the station's own
+    local time zone and display unit. `metrics` (t2m/hi) and `sources`
+    (forecast/observed) are independent — any combination can be shown."""
+    if metrics is None:
+        metrics = DEFAULT_METRICS
+    if sources is None:
+        sources = DEFAULT_SOURCES
     stn = get_station(station_id)
     if stn is None:
         return _station_placeholder(f"Station {station_id} not in catalog.")
@@ -539,8 +552,10 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
 
     # Extract GFS time series at station's nearest grid point
     sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
-    gfs_t2m = _GFS_DS["t2m"].sel(**sel).to_series()
-    gfs_hi  = _GFS_DS["hi"].sel(**sel).to_series()
+    gfs_series = {
+        "t2m": _GFS_DS["t2m"].sel(**sel).to_series(),
+        "hi":  _GFS_DS["hi"].sel(**sel).to_series(),
+    }
 
     def _to_local(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
         idx = pd.DatetimeIndex(idx)
@@ -548,57 +563,59 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             idx = idx.tz_localize("UTC")
         return idx.tz_convert(tz)
 
-    gfs_t2m.index = _to_local(gfs_t2m.index)
-    gfs_hi.index  = _to_local(gfs_hi.index)
+    for s in gfs_series.values():
+        s.index = _to_local(s.index)
 
     # Animation cursor
     times     = _GFS_DS.time.values
     cursor_ts = _to_local(pd.DatetimeIndex([times[min(int(time_idx or 0), len(times) - 1)]]))[0]
     tz_abbr   = cursor_ts.strftime("%Z")
 
-    # ASOS obs run up to whenever they were fetched (real "now"), which is
-    # typically several hours after the GFS init time — without this, the
-    # forecast lines and the obs dots both cover that overlap window,
-    # showing two different answers for the same past hours. Trim the
-    # forecast lines to start only where real observations leave off.
-    gfs_t2m_line, gfs_hi_line = gfs_t2m, gfs_hi
-    if "obs" in series and not asos_df.empty:
-        obs_local = asos_df["valid_utc"].dropna().dt.tz_convert(tz)
-        if not obs_local.empty:
-            latest_obs = obs_local.max()
-            gfs_t2m_line = gfs_t2m[gfs_t2m.index > latest_obs]
-            gfs_hi_line  = gfs_hi[gfs_hi.index > latest_obs]
+    # Observed Heat Index isn't in the raw ASOS feed — compute it from real
+    # observed temp+dewpoint with the same NWS formula used for the forecast,
+    # so "Feels Like (Observed)" is an actual measurement, not a model value.
+    obs_local = pd.DataFrame()
+    if not asos_df.empty:
+        obs_local = asos_df.dropna(subset=["temp_c"]).copy()
+        obs_local["valid_local"] = obs_local["valid_utc"].dt.tz_convert(tz)
+        has_td = obs_local["dewpoint_c"].notna()
+        obs_local["hi_c"] = np.nan
+        if has_td.any():
+            obs_local.loc[has_td, "hi_c"] = heat_index_array(
+                obs_local.loc[has_td, "temp_c"].values,
+                obs_local.loc[has_td, "dewpoint_c"].values,
+            )
 
     fig = go.Figure()
 
-    # GFS forecast lines. Heat Index is the "feels like" number most people
-    # already recognize, so it's the bold primary line; T2m is a thin reference.
-    if "t2m" in series:
-        fig.add_trace(go.Scatter(
-            x=gfs_t2m_line.index, y=_convert_array(gfs_t2m_line.values, unit), mode="lines",
-            line=dict(color="#38bdf8", width=1.4, dash="dot"),
-            name="Actual Temp",
-            hovertemplate=f"T2m: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
-        ))
-    if "hi" in series:
-        fig.add_trace(go.Scatter(
-            x=gfs_hi_line.index, y=_convert_array(gfs_hi_line.values, unit), mode="lines",
-            line=dict(color="#fb923c", width=2.8),
-            name="Feels Like (Heat Index)",
-            hovertemplate=f"Feels like: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
-        ))
-    # ASOS observations (valid_utc is already tz-aware UTC)
-    if not asos_df.empty:
-        if "obs" in series:
-            obs = asos_df.dropna(subset=["temp_c"]).copy()
-            if not obs.empty:
-                obs["valid_local"] = obs["valid_utc"].dt.tz_convert(tz)
+    for key in ("hi", "t2m"):
+        if key not in metrics:
+            continue
+        meta = _METRIC_META[key]
+
+        if "forecast" in sources:
+            fig.add_trace(go.Scatter(
+                x=gfs_series[key].index, y=_convert_array(gfs_series[key].values, unit),
+                mode="lines",
+                line=dict(color=meta["color"], width=meta["width"], dash=meta["dash"]),
+                name=f"{meta['label']} (Forecast)",
+                hovertemplate=f"{meta['label']} (Forecast): %{{y:.1f}}{unit_label}  "
+                              f"%{{x|%b %d %I:%M %p}}<extra></extra>",
+            ))
+
+        if "observed" in sources and not obs_local.empty:
+            col = "temp_c" if key == "t2m" else "hi_c"
+            pts = obs_local.dropna(subset=[col])
+            if not pts.empty:
                 fig.add_trace(go.Scatter(
-                    x=obs["valid_local"], y=_convert_array(obs["temp_c"].values, unit), mode="markers",
-                    marker=dict(color="#38bdf8", size=5, opacity=0.85),
-                    name=f"{station_id} obs",
-                    hovertemplate=f"Obs: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
+                    x=pts["valid_local"], y=_convert_array(pts[col].values, unit),
+                    mode="markers",
+                    marker=dict(color=meta["color"], size=5, opacity=0.85),
+                    name=f"{meta['label']} (Observed)",
+                    hovertemplate=f"{meta['label']} (Observed): %{{y:.1f}}{unit_label}  "
+                                  f"%{{x|%b %d %I:%M %p}}<extra></extra>",
                 ))
+
     # Selected-time cursor — not literally "now": marks whatever day/time is
     # picked in the Day/Time dropdowns, which can be a future forecast day.
     # Distinct white so it doesn't blend with the amber threshold line.
@@ -619,20 +636,19 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     # boundary on the official heat index chart, not a fixed national
     # "Excessive Heat Warning" trigger (those are set regionally by local
     # NWS offices and are typically much higher, 100-115°F+).
-    # Only makes sense alongside the Heat Index series, so it follows that toggle.
+    # Only makes sense alongside the Heat Index metric, so it follows that toggle.
     # Spans the full visible range — including the ASOS obs history, not just
     # the forecast portion from "now" onward — and is bold enough to read as
     # a hard line, not a faint gridline.
-    x0_dt, x1_dt = gfs_t2m.index[0], gfs_t2m.index[-1]
-    if "obs" in series and not asos_df.empty:
-        obs_local = asos_df["valid_utc"].dropna().dt.tz_convert(tz)
-        if not obs_local.empty:
-            x0_dt = min(x0_dt, obs_local.min())
+    x0_dt = gfs_series["t2m"].index[0]
+    x1_dt = gfs_series["t2m"].index[-1]
+    if "observed" in sources and not obs_local.empty:
+        x0_dt = min(x0_dt, obs_local["valid_local"].min())
     x0, x1 = x0_dt.isoformat(), x1_dt.isoformat()
     for thresh_c, desc, color, requires in [
         (32.0, "(Extreme Caution begins)", "rgba(241,245,249,0.75)", "hi"),
     ]:
-        if requires not in series:
+        if requires not in metrics:
             continue
         y_disp = _convert(thresh_c, unit)
         num_fmt = f"{y_disp:.0f}" if unit == "F" else f"{y_disp:.1f}"
@@ -875,19 +891,37 @@ app.layout = html.Div(
                             id="station-hint",
                             style={"fontSize": "12px", "color": "#475569"},
                         ),
-                        html.Div(id="series-selector-wrap", style={"display": "none"}, children=[
-                            dcc.Checklist(
-                                id="series-selector",
-                                options=[
-                                    {"label": " Feels Like (Heat Index)", "value": "hi"},
-                                    {"label": " Actual Temp",             "value": "t2m"},
-                                    {"label": " ASOS Temp obs",           "value": "obs"},
-                                ],
-                                value=DEFAULT_SERIES, inline=True,
-                                inputStyle={"marginRight": "4px"},
-                                labelStyle={"marginRight": "14px", "fontSize": "12px",
-                                            "color": "#cbd5e1"},
-                            ),
+                        html.Div(id="series-selector-wrap",
+                                 style={"display": "none", "gap": "20px", "flexWrap": "wrap"},
+                                 children=[
+                            html.Div([
+                                html.Span("Metric  ", style={"fontSize": "11px", "color": "#64748b"}),
+                                dcc.Checklist(
+                                    id="metric-selector",
+                                    options=[
+                                        {"label": " Feels Like", "value": "hi"},
+                                        {"label": " Actual Temp", "value": "t2m"},
+                                    ],
+                                    value=DEFAULT_METRICS, inline=True,
+                                    inputStyle={"marginRight": "4px"},
+                                    labelStyle={"marginRight": "14px", "fontSize": "12px",
+                                                "color": "#cbd5e1"},
+                                ),
+                            ]),
+                            html.Div([
+                                html.Span("Source  ", style={"fontSize": "11px", "color": "#64748b"}),
+                                dcc.Checklist(
+                                    id="source-selector",
+                                    options=[
+                                        {"label": " Model Forecast", "value": "forecast"},
+                                        {"label": " Observed (ASOS)", "value": "observed"},
+                                    ],
+                                    value=DEFAULT_SOURCES, inline=True,
+                                    inputStyle={"marginRight": "4px"},
+                                    labelStyle={"marginRight": "14px", "fontSize": "12px",
+                                                "color": "#cbd5e1"},
+                                ),
+                            ]),
                         ]),
                     ],
                 ),
@@ -951,7 +985,8 @@ def toggle_hour_dropdown(var_key):
     Input("selected-station", "data"),
 )
 def toggle_series_selector(station_id):
-    return {} if station_id else {"display": "none"}
+    shown = {"display": "flex", "gap": "20px", "flexWrap": "wrap"}
+    return shown if station_id else {"display": "none"}
 
 
 @app.callback(
@@ -1076,9 +1111,10 @@ def select_station(clickData, current):
     Input("selected-station", "data"),
     Input("current-time-idx", "data"),
     Input("unit-selector",    "value"),
-    Input("series-selector",  "value"),
+    Input("metric-selector",  "value"),
+    Input("source-selector",  "value"),
 )
-def update_station_panel(station_id, time_idx, unit, series):
+def update_station_panel(station_id, time_idx, unit, metrics, sources):
     time_idx = int(time_idx or 0)
 
     if not station_id:
@@ -1106,7 +1142,8 @@ def update_station_panel(station_id, time_idx, unit, series):
             _asos_cache[station_id] = asos_df
         print(f"{len(asos_df)} obs")
 
-    fig   = _build_station_figure(station_id, asos_df, time_idx, unit=unit, series=series)
+    fig   = _build_station_figure(station_id, asos_df, time_idx, unit=unit,
+                                  metrics=metrics, sources=sources)
     hint  = (f"Station: {station_id} — {stn['name']} ({stn['state']})  "
              f"·  {len(asos_df)} recent ASOS obs  ·  Click another station to switch")
 
