@@ -122,6 +122,17 @@ else:
 # In-process cache for ASOS obs, keyed by station_id
 _asos_cache: dict[str, pd.DataFrame] = {}
 
+# NWS Daily Climate Report data (actual vs 1991-2020 normal), bulk-fetched
+# once via scripts/fetch_climate_normals.py - not every station has one, so
+# a missing key here just means that station's climate context isn't shown.
+_CLIMATE_NORMALS_PATH = Path("data") / "climate_normals.json"
+if _CLIMATE_NORMALS_PATH.exists():
+    import json as _json
+    _CLIMATE_NORMALS = _json.loads(_CLIMATE_NORMALS_PATH.read_text())
+    print(f"[app] Climate normals loaded: {len(_CLIMATE_NORMALS)} stations")
+else:
+    _CLIMATE_NORMALS = {}
+
 
 # ── unit helpers ──────────────────────────────────────────────────────────────
 
@@ -819,6 +830,43 @@ def _hero_tile(station_id: str, time_idx: int, unit: str) -> html.Div:
     )
 
 
+def _climate_context(station_id: str, unit: str) -> html.Div:
+    """
+    How the day's actual high compares to the 1991-2020 NWS normal for
+    this station, from a bulk-fetched NWS Daily Climate Report (not every
+    station has one - a missing entry just means nothing is shown).
+    """
+    info = _CLIMATE_NORMALS.get(station_id)
+    if info is None:
+        return html.Div()
+
+    unit_label   = _unit_label(unit)
+    actual_disp  = _convert((info["high_actual_f"] - 32) * 5 / 9, unit)
+    normal_disp  = _convert((info["high_normal_f"] - 32) * 5 / 9, unit)
+    departure_f  = info["high_departure_f"]
+    num_fmt = (lambda v: f"{v:.0f}") if unit == "F" else (lambda v: f"{v:.1f}")
+    departure_disp = abs(departure_f) * (5 / 9 if unit == "C" else 1)
+
+    if departure_f > 0:
+        direction, color = "above", "#f2994a"
+    elif departure_f < 0:
+        direction, color = "below", "#38bdf8"
+    else:
+        direction, color = "at", "#94a3b8"
+
+    period = "Today's high so far" if info["period_label"] == "Today" else \
+             f"{info['period_label']}'s high"
+
+    text = (f"{period}: {num_fmt(actual_disp)}{unit_label} - "
+            f"{num_fmt(departure_disp)}{unit_label} {direction} the 1991-2020 normal "
+            f"({num_fmt(normal_disp)}{unit_label})")
+
+    return html.Div(
+        text,
+        style={"fontSize": "12px", "color": color, "marginBottom": "10px"},
+    )
+
+
 
 
 # ── Dash app ──────────────────────────────────────────────────────────────────
@@ -1238,6 +1286,7 @@ def update_station_panel(station_id, time_idx, unit, metrics):
 
     panel = html.Div([
         _hero_tile(station_id, time_idx, unit),
+        _climate_context(station_id, unit),
         dcc.Graph(figure=fig, config={"displayModeBar": False}),
     ])
     return panel, hint
