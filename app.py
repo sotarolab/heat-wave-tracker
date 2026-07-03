@@ -416,14 +416,17 @@ def _mapbox_figure(
                              size=9)
 
     # Scattermapbox markers have no border/line property (unlike regular
-    # Scatter), so a dark "halo" trace underneath - same points, a few
-    # pixels larger, solid dark navy - fakes an outline. Without it, light
-    # station colors disappear into light basemap/field colors.
+    # Scatter), so a dark "halo" trace underneath - same points, slightly
+    # larger, solid dark navy - fakes a thin outline. Without it, light
+    # station colors disappear into light basemap/field colors. Kept small
+    # and fixed-width (not proportional to marker size) so it reads as a
+    # subtle border even on the smallest dots, not a dominant ring that
+    # drowns out the size-by-severity signal.
     sizes = marker_kwargs["size"]
-    halo_sizes = [s + 3 for s in sizes] if isinstance(sizes, list) else sizes + 3
+    halo_sizes = [s + 1.5 for s in sizes] if isinstance(sizes, list) else sizes + 1.5
     fig.add_trace(go.Scattermapbox(
         lat=stn_lats, lon=stn_lons, mode="markers",
-        marker=dict(size=halo_sizes, color="#0f172a", opacity=0.85),
+        marker=dict(size=halo_sizes, color="#0f172a", opacity=0.55),
         hoverinfo="none", showlegend=False,
     ))
 
