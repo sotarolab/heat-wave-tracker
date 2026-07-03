@@ -556,20 +556,33 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     cursor_ts = _to_local(pd.DatetimeIndex([times[min(int(time_idx or 0), len(times) - 1)]]))[0]
     tz_abbr   = cursor_ts.strftime("%Z")
 
+    # ASOS obs run up to whenever they were fetched (real "now"), which is
+    # typically several hours after the GFS init time — without this, the
+    # forecast lines and the obs dots both cover that overlap window,
+    # showing two different answers for the same past hours. Trim the
+    # forecast lines to start only where real observations leave off.
+    gfs_t2m_line, gfs_hi_line = gfs_t2m, gfs_hi
+    if "obs" in series and not asos_df.empty:
+        obs_local = asos_df["valid_utc"].dropna().dt.tz_convert(tz)
+        if not obs_local.empty:
+            latest_obs = obs_local.max()
+            gfs_t2m_line = gfs_t2m[gfs_t2m.index > latest_obs]
+            gfs_hi_line  = gfs_hi[gfs_hi.index > latest_obs]
+
     fig = go.Figure()
 
     # GFS forecast lines. Heat Index is the "feels like" number most people
     # already recognize, so it's the bold primary line; T2m is a thin reference.
     if "t2m" in series:
         fig.add_trace(go.Scatter(
-            x=gfs_t2m.index, y=_convert_array(gfs_t2m.values, unit), mode="lines",
-            line=dict(color="#94a3b8", width=1.4, dash="dot"),
+            x=gfs_t2m_line.index, y=_convert_array(gfs_t2m_line.values, unit), mode="lines",
+            line=dict(color="#38bdf8", width=1.4, dash="dot"),
             name="Actual Temp",
             hovertemplate=f"T2m: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
         ))
     if "hi" in series:
         fig.add_trace(go.Scatter(
-            x=gfs_hi.index, y=_convert_array(gfs_hi.values, unit), mode="lines",
+            x=gfs_hi_line.index, y=_convert_array(gfs_hi_line.values, unit), mode="lines",
             line=dict(color="#fb923c", width=2.8),
             name="Feels Like (Heat Index)",
             hovertemplate=f"Feels like: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
@@ -582,7 +595,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                 obs["valid_local"] = obs["valid_utc"].dt.tz_convert(tz)
                 fig.add_trace(go.Scatter(
                     x=obs["valid_local"], y=_convert_array(obs["temp_c"].values, unit), mode="markers",
-                    marker=dict(color="#94a3b8", size=5, opacity=0.85),
+                    marker=dict(color="#38bdf8", size=5, opacity=0.85),
                     name=f"{station_id} obs",
                     hovertemplate=f"Obs: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
                 ))
@@ -613,7 +626,10 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         xanchor="left", yanchor="bottom",
     )
 
-    # Reference line: NWS Excessive Heat advisory threshold (32°C/90°F HI).
+    # Reference line: NWS "Extreme Caution" threshold (32°C/90°F HI) — the
+    # boundary on the official heat index chart, not a fixed national
+    # "Excessive Heat Warning" trigger (those are set regionally by local
+    # NWS offices and are typically much higher, 100-115°F+).
     # Only makes sense alongside the Heat Index series, so it follows that toggle.
     # Spans the full visible range — including the ASOS obs history, not just
     # the forecast portion from "now" onward — and is bold enough to read as
@@ -625,7 +641,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             x0_dt = min(x0_dt, obs_local.min())
     x0, x1 = x0_dt.isoformat(), x1_dt.isoformat()
     for thresh_c, desc, color, requires in [
-        (32.0, "(NWS Excessive Heat)", "rgba(241,245,249,0.75)", "hi"),
+        (32.0, "(Extreme Caution begins)", "rgba(241,245,249,0.75)", "hi"),
     ]:
         if requires not in series:
             continue
@@ -885,11 +901,14 @@ app.layout = html.Div(
                         ),
                     ],
                 ),
-                html.Div(
-                    "Heat Index = how hot it feels once humidity is factored in (NWS formula).",
-                    style={"fontSize": "11px", "color": "#64748b", "marginBottom": "10px",
-                           "maxWidth": "820px", "lineHeight": "1.5"},
-                ),
+                html.Div([
+                    "Heat Index = how hot it feels once humidity is factored in (NWS formula). ",
+                    html.A("Learn more at weather.gov",
+                          href="https://www.weather.gov/safety/heat-index",
+                          target="_blank",
+                          style={"color": "#64748b", "textDecoration": "underline"}),
+                ], style={"fontSize": "11px", "color": "#64748b", "marginBottom": "10px",
+                         "maxWidth": "820px", "lineHeight": "1.5"}),
                 html.Div(id="station-panel"),
             ],
         )),
@@ -898,7 +917,14 @@ app.layout = html.Div(
         _page_section(None, None, html.Div(
             style={"padding": "16px 24px 24px 24px", "borderTop": "1px solid #1e293b",
                    "textAlign": "center", "fontSize": "11px", "color": "#475569"},
-            children="Built by Sebastian Otarola-Bustos, PhD  ·  Rockville, MD",
+            children=[
+                html.Div("Built by Sebastian Otarola-Bustos, PhD  ·  Rockville, MD"),
+                html.Div(
+                    "Forecast: NOAA GFS  ·  Observations: NOAA/Iowa Environmental Mesonet ASOS  ·  "
+                    "Risk categories: National Weather Service",
+                    style={"marginTop": "4px", "color": "#374151"},
+                ),
+            ],
         )),
 
         # ── hidden components ─────────────────────────────────────────────────

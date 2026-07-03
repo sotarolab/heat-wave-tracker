@@ -28,19 +28,27 @@ def heat_index_array(t_c, td_c):
     NWS Rothfusz heat index, vectorized.
     Inputs: T and Td in °C (any shape). Output: heat index in °C.
 
-    Below the Rothfusz threshold (T < 80°F or RH < 40%), the Steadman
-    simple linear approximation is used instead.
+    NWS states heat index is undefined/not meaningful below 80°F — below
+    that threshold this returns actual temperature unchanged, rather than
+    the Steadman simple formula (which was only ever meant as an internal
+    stepping stone to decide whether to escalate to the full Rothfusz
+    regression, not a value fit for display on its own below 80°F).
     """
     t  = np.asarray(t_c,  dtype=float)
     td = np.asarray(td_c, dtype=float)
     rh = relative_humidity(t, td)
     tf = t * 9.0 / 5.0 + 32.0
 
-    # Steadman simple approximation (default, below threshold)
-    hi_f = 0.5 * (tf + 61.0 + (tf - 68.0) * 1.2 + rh * 0.094)
+    # Below 80°F: heat index undefined per NWS — report actual temperature.
+    hi_f = tf.copy()
 
-    # Rothfusz full regression where T ≥ 80°F and RH ≥ 40%
-    mask = (tf >= 80.0) & (rh >= 40.0)
+    # 80°F+: at minimum use the Steadman simple approximation.
+    warm = tf >= 80.0
+    hi_f[warm] = (0.5 * (tf[warm] + 61.0 + (tf[warm] - 68.0) * 1.2
+                         + rh[warm] * 0.094))
+
+    # 80°F+ and RH ≥ 40%: escalate to the full Rothfusz regression.
+    mask = warm & (rh >= 40.0)
     tm, rm = tf[mask], rh[mask]
     hi_f[mask] = (-42.379
                   + 2.04901523 * tm
