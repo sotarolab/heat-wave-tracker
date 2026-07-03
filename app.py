@@ -482,6 +482,16 @@ def _get_station_risk_values(time_idxs: list[int]) -> list[float] | None:
     return vals
 
 
+def _risk_source_link() -> html.Span:
+    """Citation for the risk categories, placed right next to them (not just
+    buried in the page footer) so the source is obvious wherever they appear."""
+    return html.Span([
+        "Source: ",
+        html.A("NWS heat index chart", href="https://www.weather.gov/safety/heat-index",
+              target="_blank", style={"color": "#64748b", "textDecoration": "underline"}),
+    ], style={"color": "#64748b", "whiteSpace": "nowrap"})
+
+
 def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
                        top_n: int = 15) -> html.Div:
     """
@@ -544,7 +554,7 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
                   "fontSize": "12px", "borderBottom": "1px solid #1e293b"}))
 
     legend_order = [(NO_RISK_LABEL, NO_RISK_COLOR)] + [(label, color) for _, label, color in RISK_CATEGORIES_F]
-    legend = html.Div([
+    legend_chips = [
         html.Span([
             html.Span(label, style={
                 "backgroundColor": color, "color": "#0f172a", "padding": "2px 8px",
@@ -554,9 +564,12 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
             html.Span(RISK_DESCRIPTIONS.get(label, ""), style={"color": "#64748b"}),
         ], style={"marginRight": "18px", "whiteSpace": "nowrap"})
         for label, color in legend_order
-    ], style={"display": "flex", "flexWrap": "wrap", "gap": "6px 0",
-              "fontSize": "11px", "marginTop": "10px", "paddingTop": "10px",
-              "borderTop": "1px solid #334155"})
+    ]
+    legend_chips.append(_risk_source_link())
+    legend = html.Div(legend_chips,
+                      style={"display": "flex", "flexWrap": "wrap", "gap": "6px 0",
+                             "fontSize": "11px", "marginTop": "10px", "paddingTop": "10px",
+                             "borderTop": "1px solid #334155"})
 
     subtitle = "Ranked by forecasted Heat Index"
     if time_label:
@@ -668,21 +681,23 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                               f"%{{x|%b %d %I:%M %p}}<extra></extra>",
             ))
 
-    # Selected-time cursor - not literally "now": marks whatever day/time is
-    # picked in the Day/Time dropdowns, which can be a future forecast day.
-    # Distinct white so it doesn't blend with the amber threshold line.
-    fig.add_shape(
-        type="line",
-        x0=cursor_ts.isoformat(), x1=cursor_ts.isoformat(),
-        y0=0, y1=1, yref="paper",
-        line=dict(color="rgba(226,232,240,0.85)", width=1.5, dash="dot"),
-    )
-    fig.add_annotation(
-        x=cursor_ts.isoformat(), y=1, yref="paper",
-        text="Selected time", showarrow=False,
-        font=dict(size=9, color="#e2e8f0"),
-        xanchor="left", yanchor="bottom",
-    )
+    # "Now" cursor - the real observed/forecast boundary, not the day/time
+    # picked in the Day/Time dropdowns (that's shown in the title instead).
+    # This is the one universally meaningful reference point on the chart:
+    # everything left of it happened, everything right is predicted.
+    if now_ts is not None:
+        fig.add_shape(
+            type="line",
+            x0=now_ts.isoformat(), x1=now_ts.isoformat(),
+            y0=0, y1=1, yref="paper",
+            line=dict(color="rgba(226,232,240,0.85)", width=1.5, dash="dot"),
+        )
+        fig.add_annotation(
+            x=now_ts.isoformat(), y=1, yref="paper",
+            text="Now", showarrow=False,
+            font=dict(size=9, color="#e2e8f0"),
+            xanchor="left", yanchor="bottom",
+        )
 
     # Reference line: NWS "Extreme Caution" threshold (32°C/90°F HI) - the
     # boundary on the official heat index chart, not a fixed national
@@ -713,10 +728,12 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                            font=dict(size=8, color=color),
                            xanchor="right", yanchor="bottom")
 
+    selected_str = cursor_ts.strftime("%a %b %d, %I:%M %p").replace(" 0", " ")
     fig.update_layout(
         paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG,
         title=dict(
-            text=f"{station_id} - {stn['name']} ({stn['state']})  ·  times in {tz_abbr}",
+            text=f"{station_id} - {stn['name']} ({stn['state']})  ·  times in {tz_abbr}"
+                 f"  ·  viewing forecast for {selected_str}",
             font=dict(size=13, color=_PANEL_FONT), x=0.01, xanchor="left",
         ),
         uirevision=station_id,
@@ -1120,6 +1137,7 @@ def update_risk_caption(var_key):
             }),
             html.Span(RISK_DESCRIPTIONS.get(label, ""), style={"color": "#94a3b8"}),
         ], style={"marginRight": "20px", "whiteSpace": "nowrap"}))
+    chips.append(_risk_source_link())
     return html.Div(chips, style={"display": "flex", "flexWrap": "wrap",
                                   "gap": "6px 0", "fontSize": "11px",
                                   "padding": "8px 0 0 0"})
