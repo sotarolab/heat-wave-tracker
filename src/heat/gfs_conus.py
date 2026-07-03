@@ -85,7 +85,7 @@ def fetch_gfs_conus(
     lon_min_360 = west % 360
     lon_max_360 = east % 360
 
-    print(f"[gfs] Fetching {label} T2m + Td2m — init {init_dt}  "
+    print(f"[gfs] Fetching {label} T2m + Td2m - init {init_dt}  "
           f"({len(list(fxx_range))} steps)")
 
     slices = []
@@ -125,7 +125,7 @@ def fetch_gfs_conus(
         print("ok")
 
     if not slices:
-        raise RuntimeError("No GFS data fetched — check init time availability.")
+        raise RuntimeError("No GFS data fetched - check init time availability.")
 
     ds = xr.concat(slices, dim="time")
 
@@ -159,7 +159,7 @@ def fetch_gfs_conus(
 def load_or_fetch(out_path: Path = DEFAULT_OUT, **kwargs) -> xr.Dataset | None:
     """
     Load the pre-fetched GFS file if it exists, otherwise return None.
-    Does NOT attempt to download — call fetch_gfs_conus() for that.
+    Does NOT attempt to download - call fetch_gfs_conus() for that.
     """
     if Path(out_path).exists():
         return xr.open_dataset(out_path)

@@ -38,11 +38,11 @@ def fetch_station_obs(station_id: str, hours: int = 72) -> pd.DataFrame:
     Fetch the last `hours` of ASOS observations for one station from IEM.
 
     Returns DataFrame with columns:
-        valid_utc   — tz-aware UTC timestamp
-        temp_c      — 2m temperature (°C)
-        dewpoint_c  — 2m dewpoint (°C)
-        rh          — relative humidity (%)
-        wind_spd_kt — wind speed (knots)
+        valid_utc   - tz-aware UTC timestamp
+        temp_c      - 2m temperature (°C)
+        dewpoint_c  - 2m dewpoint (°C)
+        rh          - relative humidity (%)
+        wind_spd_kt - wind speed (knots)
     Returns an empty DataFrame on error.
     """
     end   = pd.Timestamp.utcnow()

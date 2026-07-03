@@ -28,7 +28,7 @@ def heat_index_array(t_c, td_c):
     NWS Rothfusz heat index, vectorized.
     Inputs: T and Td in °C (any shape). Output: heat index in °C.
 
-    NWS states heat index is undefined/not meaningful below 80°F — below
+    NWS states heat index is undefined/not meaningful below 80°F - below
     that threshold this returns actual temperature unchanged, rather than
     the Steadman simple formula (which was only ever meant as an internal
     stepping stone to decide whether to escalate to the full Rothfusz
@@ -39,7 +39,7 @@ def heat_index_array(t_c, td_c):
     rh = relative_humidity(t, td)
     tf = t * 9.0 / 5.0 + 32.0
 
-    # Below 80°F: heat index undefined per NWS — report actual temperature.
+    # Below 80°F: heat index undefined per NWS - report actual temperature.
     hi_f = tf.copy()
 
     # 80°F+: at minimum use the Steadman simple approximation.

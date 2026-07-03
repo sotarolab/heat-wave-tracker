@@ -1,7 +1,7 @@
 """
 heat-wave-tracker / app.py
 ===========================
-CONUS heat wave dashboard — GFS surface field with station click panel.
+CONUS heat wave dashboard - GFS surface field with station click panel.
 
 Variables: 2m Temperature | Heat Index (NWS) | Risk Level (NWS heat index
 categories, daily max)
@@ -37,13 +37,13 @@ from src.heat.compute   import heat_index_array
 DATA_PATH  = DEFAULT_OUT
 CONUS_BBOX = [-127.0, 23.0, -65.0, 51.0]
 
-# Overall page content is capped to this width and centered — keeps the map's
+# Overall page content is capped to this width and centered - keeps the map's
 # aspect ratio sane on wide monitors and matches the zoom heuristic below.
 PAGE_MAX_WIDTH = 1400
 MAP_HEIGHT     = 620
 
 # Reference timezone for map-level labels (a single CONUS raster snapshot spans
-# 4 zones at once, so there's no true "local" time for it — Eastern is used as
+# 4 zones at once, so there's no true "local" time for it - Eastern is used as
 # the display convention, with UTC alongside for anyone who needs it).
 _DISPLAY_TZ = ZoneInfo("America/New_York")
 
@@ -77,7 +77,7 @@ _MPL_CMAPS = {
     "Blues":    plt.cm.Blues,
 }
 
-# NWS heat index risk categories — native NOAA thresholds (°F) plus their
+# NWS heat index risk categories - native NOAA thresholds (°F) plus their
 # °C equivalents, so each display unit uses its own natural round numbers.
 # A cell below the first threshold is left fully transparent (no elevated risk).
 RISK_CATEGORIES_F = [
@@ -91,10 +91,10 @@ RISK_CATEGORIES_C = [
     for f, label, color in RISK_CATEGORIES_F
 ]
 
-# Plain-language versions of NOAA's official heat-index risk definitions —
+# Plain-language versions of NOAA's official heat-index risk definitions,
 # same source NWS/NYT-style heat maps cite, phrased for a non-meteorologist.
 RISK_DESCRIPTIONS = {
-    "No Elevated Risk": "Comfortable — no unusual heat risk.",
+    "No Elevated Risk": "Comfortable - no unusual heat risk.",
     "Caution":          "Fatigue possible with prolonged outdoor exposure or activity.",
     "Extreme Caution":  "Heat cramps or exhaustion possible with prolonged exposure or activity.",
     "Danger":           "Heat cramps or exhaustion likely; heat stroke possible if prolonged.",
@@ -184,7 +184,7 @@ def _hour_options_for_day(day_first_idx: int) -> list[dict]:
     ]
 
 
-# Precomputed once at startup — the day list is identical for every variable.
+# Precomputed once at startup - the day list is identical for every variable.
 _DAY_OPTIONS = [
     {"label": _to_et(_GFS_DS.time.values[idx]).strftime("%a %b %d"), "value": idx}
     for _, idx in _unique_forecast_days()
@@ -243,7 +243,7 @@ def _field_to_risk_image(data: np.ndarray, categories: list[tuple],
 
 
 NO_DATA_COLOR    = "#94a3b8"  # missing/unavailable value
-NO_RISK_COLOR    = "#0ca30c"  # below Caution — a real category, not missing data
+NO_RISK_COLOR    = "#0ca30c"  # below Caution - a real category, not missing data
 NO_RISK_LABEL    = "No Elevated Risk"
 
 
@@ -311,7 +311,7 @@ def _mapbox_figure(
     """
     GFS field as raster image layer on CartoDB Positron, with colored
     station markers overlaid. Station markers share the field's colorscale
-    so hot stations look red and cool stations look blue — same as the field.
+    so hot stations look red and cool stations look blue - same as the field.
 
     For var_key == "risk", the field/markers use the discrete NWS heat-index
     risk categories instead, with a categorical legend in place of a colorbar.
@@ -343,7 +343,7 @@ def _mapbox_figure(
 
     if is_risk:
         # One legend-only ghost trace per category (mapbox has no discrete colorbar).
-        # "No Elevated Risk" is listed first — it's a real category (below Caution),
+        # "No Elevated Risk" is listed first - it's a real category (below Caution),
         # not missing data, and needs to read that way at a glance.
         legend_entries = [(NO_RISK_COLOR, NO_RISK_LABEL)] + [(c, l) for _, l, c in categories]
         for color, label in legend_entries:
@@ -371,11 +371,11 @@ def _mapbox_figure(
             showlegend=False, hoverinfo="none", opacity=0,
         ))
 
-    # Station markers — colored by current GFS value at each station
+    # Station markers - colored by current GFS value at each station
     stn_lats = [s["lat"]  for s in MAJOR_CONUS_STATIONS]
     stn_lons = [s["lon"]  for s in MAJOR_CONUS_STATIONS]
     stn_ids  = [s["id"]   for s in MAJOR_CONUS_STATIONS]
-    stn_text = [f"{s['id']} — {s['name']} ({s['state']})" for s in MAJOR_CONUS_STATIONS]
+    stn_text = [f"{s['id']} - {s['name']} ({s['state']})" for s in MAJOR_CONUS_STATIONS]
 
     if station_values is not None and is_risk:
         marker_kwargs = dict(color=[_risk_color(v, categories) for v in station_values],
@@ -415,6 +415,10 @@ def _mapbox_figure(
                 sourcetype="image", source=img_src,
                 coordinates=image_corners, opacity=0.72, below="traces",
             )],
+            # Caps pan/zoom-out to roughly North America. Without this the
+            # map has no minimum zoom, so zooming out wraps the world tiles
+            # and shows the CONUS raster floating twice on a repeating map.
+            bounds=dict(west=-145.0, east=-50.0, south=8.0, north=65.0),
         ),
         height=MAP_HEIGHT,
         margin=dict(l=0, r=0, t=30, b=0),
@@ -459,7 +463,7 @@ def _get_station_risk_values(time_idxs: list[int]) -> list[float] | None:
 def _leaderboard_table(time_idx: int, unit: str, top_n: int = 15) -> html.Div:
     """
     Ranked table of the hottest stations right now, by forecasted Heat Index.
-    Ranked by *current forecasted severity*, not historical records — this app
+    Ranked by *current forecasted severity*, not historical records - this app
     has no climate-normals data source, so it can't verify record claims.
     """
     if _GFS_DS is None:
@@ -522,7 +526,7 @@ DEFAULT_METRICS = ["hi", "t2m"]
 
 # Color encodes the metric. Actual Temp gets both a past (observed) and
 # future (forecast) segment, split at "now" so they never overlap. Feels
-# Like only ever shows the forward-looking forecast — there's no need to
+# Like only ever shows the forward-looking forecast - there's no need to
 # compare it against a computed "observed feels like," which is a derived
 # quantity most people don't intuitively reason about, and doubled the
 # number of things on screen for no real benefit.
@@ -573,7 +577,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     # ASOS obs run up to whenever they were fetched (real "now"), which is
     # usually hours after the GFS init time. "Now" is the natural dividing
     # line between what actually happened (observed) and what's predicted
-    # (forecast) — forecast lines only ever show the future side of it.
+    # (forecast) - forecast lines only ever show the future side of it.
     obs_local = pd.DataFrame()
     now_ts = None
     if not asos_df.empty:
@@ -611,7 +615,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                               f"%{{x|%b %d %I:%M %p}}<extra></extra>",
             ))
 
-    # Selected-time cursor — not literally "now": marks whatever day/time is
+    # Selected-time cursor - not literally "now": marks whatever day/time is
     # picked in the Day/Time dropdowns, which can be a future forecast day.
     # Distinct white so it doesn't blend with the amber threshold line.
     fig.add_shape(
@@ -627,13 +631,13 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         xanchor="left", yanchor="bottom",
     )
 
-    # Reference line: NWS "Extreme Caution" threshold (32°C/90°F HI) — the
+    # Reference line: NWS "Extreme Caution" threshold (32°C/90°F HI) - the
     # boundary on the official heat index chart, not a fixed national
     # "Excessive Heat Warning" trigger (those are set regionally by local
     # NWS offices and are typically much higher, 100-115°F+).
     # Only makes sense alongside the Heat Index metric, so it follows that toggle.
-    # Spans the full visible range — including the ASOS obs history, not just
-    # the forecast portion from "now" onward — and is bold enough to read as
+    # Spans the full visible range - including the ASOS obs history, not just
+    # the forecast portion from "now" onward - and is bold enough to read as
     # a hard line, not a faint gridline.
     x0_dt = gfs_series["t2m"].index[0]
     x1_dt = gfs_series["t2m"].index[-1]
@@ -659,7 +663,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     fig.update_layout(
         paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG,
         title=dict(
-            text=f"{station_id} — {stn['name']} ({stn['state']})  ·  times in {tz_abbr}",
+            text=f"{station_id} - {stn['name']} ({stn['state']})  ·  times in {tz_abbr}",
             font=dict(size=13, color=_PANEL_FONT), x=0.01, xanchor="left",
         ),
         uirevision=station_id,
@@ -679,7 +683,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
 
 def _hero_tile(station_id: str, time_idx: int, unit: str) -> html.Div:
     """Big 'feels like' number + plain-language risk category for the
-    selected station/time — the headline fact, ahead of the line chart."""
+    selected station/time - the headline fact, ahead of the line chart."""
     stn = get_station(station_id)
     if stn is None or _GFS_DS is None:
         return html.Div()
@@ -732,7 +736,7 @@ server = app.server   # Gunicorn entry point
 app.title = "US Heat Wave Tracker"
 
 _SOCIAL_DESCRIPTION = (
-    "Live GFS forecast — Heat Index, risk levels, and real ASOS observations "
+    "Live GFS forecast - Heat Index, risk levels, and real ASOS observations "
     "for 165 US cities during the July 2026 heat wave."
 )
 
@@ -1049,7 +1053,7 @@ def update_map(var_key, time_idx, unit):
     Input("variable-selector", "value"),
 )
 def update_risk_caption(var_key):
-    """Plain-language legend under the map — what each risk color actually means."""
+    """Plain-language legend under the map - what each risk color actually means."""
     if var_key != "risk":
         return []
     order = [(NO_RISK_LABEL, NO_RISK_COLOR)] + [(label, color) for _, label, color in RISK_CATEGORIES_F]
@@ -1111,7 +1115,7 @@ def update_station_panel(station_id, time_idx, unit, metrics):
         )
 
     # Fetch ASOS from IEM on first click; serve from cache on subsequent updates.
-    # Only cache non-empty results — a transient IEM failure/rate-limit (empty
+    # Only cache non-empty results - a transient IEM failure/rate-limit (empty
     # df) shouldn't be remembered forever, or the station gets stuck at 0 obs.
     if station_id in _asos_cache:
         asos_df = _asos_cache[station_id]
@@ -1123,7 +1127,7 @@ def update_station_panel(station_id, time_idx, unit, metrics):
         print(f"{len(asos_df)} obs")
 
     fig   = _build_station_figure(station_id, asos_df, time_idx, unit=unit, metrics=metrics)
-    hint  = (f"Station: {station_id} — {stn['name']} ({stn['state']})  "
+    hint  = (f"Station: {station_id} - {stn['name']} ({stn['state']})  "
              f"·  {len(asos_df)} recent ASOS obs  ·  Click another station to switch")
 
     panel = html.Div([
