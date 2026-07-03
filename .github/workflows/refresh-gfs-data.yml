@@ -31,10 +31,13 @@ jobs:
       - name: Fetch latest GFS forecast
         run: python scripts/fetch_gfs_conus.py --overwrite
 
+      - name: Fetch latest climate normals (actual vs 1991-2020 NWS normal)
+        run: python scripts/fetch_climate_normals.py
+
       - name: Commit and push if data changed
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/conus_heat_tracker.nc
+          git add data/conus_heat_tracker.nc data/climate_normals.json
           git diff --cached --quiet && echo "No data change" || \
-            (git commit -m "Auto-refresh GFS forecast data" && git push)
+            (git commit -m "Auto-refresh GFS forecast + climate normals data" && git push)
