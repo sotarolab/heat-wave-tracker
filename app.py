@@ -119,8 +119,11 @@ else:
     print("      Run: python scripts/fetch_gfs_conus.py")
     _GFS_INIT = "data not loaded"
 
-# In-process cache for ASOS obs, keyed by station_id
-_asos_cache: dict[str, pd.DataFrame] = {}
+# In-process cache for ASOS obs, keyed by station_id -> (fetched_at, df).
+# TTL'd so the app doesn't keep serving an ever-staler snapshot for stations
+# that were clicked once early in the process's lifetime.
+_asos_cache: dict[str, tuple[pd.Timestamp, pd.DataFrame]] = {}
+_ASOS_CACHE_TTL = pd.Timedelta(hours=1)
 
 # NWS Daily Climate Report data (actual vs 1991-2020 normal), bulk-fetched
 # once via scripts/fetch_climate_normals.py - not every station has one, so
@@ -1275,16 +1278,20 @@ def update_station_panel(station_id, time_idx, unit, metrics):
             f"Station: {station_id}",
         )
 
-    # Fetch ASOS from IEM on first click; serve from cache on subsequent updates.
-    # Only cache non-empty results - a transient IEM failure/rate-limit (empty
-    # df) shouldn't be remembered forever, or the station gets stuck at 0 obs.
-    if station_id in _asos_cache:
-        asos_df = _asos_cache[station_id]
+    # Fetch ASOS from IEM on first click, or once the cached copy is older
+    # than the TTL; serve from cache in between. Only cache non-empty results
+    # - a transient IEM failure/rate-limit (empty df) shouldn't be remembered
+    # forever, or the station gets stuck at 0 obs.
+    cached = _asos_cache.get(station_id)
+    if cached is not None and pd.Timestamp.utcnow() - cached[0] < _ASOS_CACHE_TTL:
+        asos_df = cached[1]
     else:
         print(f"[app] Fetching ASOS for {station_id} from IEM ...", end=" ")
         asos_df = fetch_station_obs(station_id, hours=72)
         if not asos_df.empty:
-            _asos_cache[station_id] = asos_df
+            _asos_cache[station_id] = (pd.Timestamp.utcnow(), asos_df)
+        elif cached is not None:
+            asos_df = cached[1]   # fetch failed - fall back to stale cache rather than showing nothing
         print(f"{len(asos_df)} obs")
 
     fig   = _build_station_figure(station_id, asos_df, time_idx, unit=unit, metrics=metrics)
