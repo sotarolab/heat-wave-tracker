@@ -506,7 +506,7 @@ def _leaderboard_table(time_idx: int, unit: str, top_n: int = 15) -> html.Div:
                   "fontSize": "12px", "borderBottom": "1px solid #1e293b"}))
 
     return html.Div([
-        html.H3("🔥 Hottest Cities Right Now",
+        html.H3("Hottest Cities Right Now",
                 style={"fontSize": "14px", "color": "#f8fafc", "margin": "0 0 4px 0"}),
         html.Div("Ranked by forecasted Heat Index for the selected day/time.",
                  style={"fontSize": "11px", "color": "#64748b", "marginBottom": "8px"}),
@@ -597,19 +597,35 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                     hovertemplate=f"Td obs: %{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>",
                 ))
 
-    # Animation cursor
+    # Selected-time cursor — not literally "now": marks whatever day/time is
+    # picked in the Day/Time dropdowns, which can be a future forecast day.
+    # Distinct white so it doesn't blend with the amber threshold line.
     fig.add_shape(
         type="line",
         x0=cursor_ts.isoformat(), x1=cursor_ts.isoformat(),
         y0=0, y1=1, yref="paper",
-        line=dict(color="rgba(251,191,36,0.9)", width=1.5, dash="dot"),
+        line=dict(color="rgba(226,232,240,0.85)", width=1.5, dash="dot"),
+    )
+    fig.add_annotation(
+        x=cursor_ts.isoformat(), y=1, yref="paper",
+        text="Selected time", showarrow=False,
+        font=dict(size=9, color="#e2e8f0"),
+        xanchor="left", yanchor="bottom",
     )
 
     # Reference line: NWS Excessive Heat advisory threshold (32°C/90°F HI).
     # Only makes sense alongside the Heat Index series, so it follows that toggle.
-    x0, x1 = gfs_t2m.index[0].isoformat(), gfs_t2m.index[-1].isoformat()
+    # Spans the full visible range — including the ASOS obs history, not just
+    # the forecast portion from "now" onward — and is bold enough to read as
+    # a hard line, not a faint gridline.
+    x0_dt, x1_dt = gfs_t2m.index[0], gfs_t2m.index[-1]
+    if "obs" in series and not asos_df.empty:
+        obs_local = asos_df["valid_utc"].dropna().dt.tz_convert(tz)
+        if not obs_local.empty:
+            x0_dt = min(x0_dt, obs_local.min())
+    x0, x1 = x0_dt.isoformat(), x1_dt.isoformat()
     for thresh_c, desc, color, requires in [
-        (32.0, "(NWS Excessive Heat)", "rgba(251,191,36,0.45)", "hi"),
+        (32.0, "(NWS Excessive Heat)", "rgba(239,68,68,0.65)", "hi"),
     ]:
         if requires not in series:
             continue
@@ -618,7 +634,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         label = f"{num_fmt}{unit_label} {desc}"
         fig.add_shape(type="line", x0=x0, x1=x1, y0=y_disp, y1=y_disp,
                       xref="x", yref="y",
-                      line=dict(color=color, width=1, dash="dot"))
+                      line=dict(color=color, width=1.6, dash="dash"))
         fig.add_annotation(x=x1, y=y_disp, xref="x", yref="y",
                            text=label, showarrow=False,
                            font=dict(size=8, color=color),
