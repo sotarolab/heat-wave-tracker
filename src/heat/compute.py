@@ -44,13 +44,21 @@ def heat_index_array(t_c, td_c):
 
     # 80°F+: at minimum use the Steadman simple approximation.
     warm = tf >= 80.0
-    hi_f[warm] = (0.5 * (tf[warm] + 61.0 + (tf[warm] - 68.0) * 1.2
-                         + rh[warm] * 0.094))
+    simple = 0.5 * (tf + 61.0 + (tf - 68.0) * 1.2 + rh * 0.094)
+    hi_f[warm] = simple[warm]
 
-    # 80°F+ and RH ≥ 40%: escalate to the full Rothfusz regression.
-    mask = warm & (rh >= 40.0)
-    tm, rm = tf[mask], rh[mask]
-    hi_f[mask] = (-42.379
+    # NWS's real switching rule is NOT "RH >= 40%" (that's just the axis
+    # range of the popular reference chart, not a computation trigger) - it
+    # averages the simple estimate with actual temp, and escalates to the
+    # full Rothfusz regression once that average hits 80°F. A flat RH
+    # threshold badly understates heat index at high temperatures with
+    # moderate-but-under-40% humidity, where the regression should still
+    # apply almost regardless of RH. Caught via a real ASOS reading (100°F,
+    # 39.6% RH) where this returned 102°F instead of the officially
+    # published ~110°F.
+    escalate = warm & (((tf + simple) / 2.0) >= 80.0)
+    tm, rm = tf[escalate], rh[escalate]
+    hi_f[escalate] = (-42.379
                   + 2.04901523 * tm
                   + 10.14333127 * rm
                   - 0.22475541 * tm * rm
@@ -61,13 +69,13 @@ def heat_index_array(t_c, td_c):
                   - 0.00000199 * tm**2 * rm**2)
 
     # Low-humidity adjustment (dry hot desert air): subtract from HI
-    lmask = mask & (rh < 13.0) & (tf >= 80.0) & (tf <= 112.0)
+    lmask = escalate & (rh < 13.0) & (tf >= 80.0) & (tf <= 112.0)
     if lmask.any():
         hi_f[lmask] -= ((13.0 - rh[lmask]) / 4.0
                         * np.sqrt((17.0 - np.abs(tf[lmask] - 95.0)) / 17.0))
 
     # High-humidity adjustment (muggy warm air): add to HI
-    hmask = mask & (rh > 85.0) & (tf >= 80.0) & (tf <= 87.0)
+    hmask = escalate & (rh > 85.0) & (tf >= 80.0) & (tf <= 87.0)
     if hmask.any():
         hi_f[hmask] += (rh[hmask] - 85.0) / 10.0 * (87.0 - tf[hmask]) / 5.0
 

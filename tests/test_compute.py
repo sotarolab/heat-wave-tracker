@@ -98,23 +98,42 @@ class TestHeatIndexRothfuszRegion:
 
 
 class TestHeatIndexAt80FBoundary:
-    def test_hot_dry_air_uses_steadman_not_rothfusz(self):
-        # T >= 80F but RH < 40% should use the simple Steadman formula,
-        # not the full regression (which requires RH >= 40% too).
-        tf, rh_target = 90.0, 20.0
-        # Solve for a Td that gives roughly 20% RH at 90F (iterate coarsely).
+    def test_near_80F_and_dry_uses_steadman_not_rothfusz(self):
+        # NWS's real switching rule: average the simple estimate with actual
+        # temp; escalate to the full regression only once that average is
+        # >=80F. Right at the 80F floor with very low humidity, the simple
+        # estimate is low enough that the average stays under 80F.
+        tf, rh_target = 80.5, 0.0
         t_c = f_to_c(tf)
-        for td_f in np.arange(30.0, 70.0, 0.5):
+        for td_f in np.arange(-40.0, 40.0, 0.5):
             rh = relative_humidity(np.array([t_c]), np.array([f_to_c(td_f)]))[0]
             if abs(rh - rh_target) < 1.0:
                 break
         td_c = f_to_c(td_f)
         rh = relative_humidity(np.array([t_c]), np.array([td_c]))[0]
-        assert rh < 40.0
 
-        expected_steadman_f = 0.5 * (tf + 61.0 + (tf - 68.0) * 1.2 + rh * 0.094)
+        simple = 0.5 * (tf + 61.0 + (tf - 68.0) * 1.2 + rh * 0.094)
+        assert (tf + simple) / 2.0 < 80.0  # confirms this case doesn't escalate
+
         actual_f = c_to_f(heat_index_array(np.array([t_c]), np.array([td_c]))[0])
-        assert actual_f == pytest.approx(expected_steadman_f, abs=1e-6)
+        assert actual_f == pytest.approx(simple, abs=1e-6)
+
+    def test_hot_temperature_escalates_even_under_40_percent_rh(self):
+        # Regression test for a real bug: a flat "RH >= 40%" switching
+        # condition (instead of the official average-based one) understated
+        # heat index at high temperatures with moderate-but-under-40%
+        # humidity. Caught via a real ASOS reading: 100F / 39.6% RH / 71F
+        # dewpoint returned 102F instead of the officially published ~110F.
+        tf = 100.0
+        t_c = f_to_c(tf)
+        td_c = f_to_c(71.0)
+        rh = relative_humidity(np.array([t_c]), np.array([td_c]))[0]
+        assert rh < 40.0  # exactly the case the old flat threshold missed
+
+        expected_f = rothfusz_f(tf, rh)
+        actual_f = c_to_f(heat_index_array(np.array([t_c]), np.array([td_c]))[0])
+        assert actual_f == pytest.approx(expected_f, abs=1e-6)
+        assert actual_f > 105.0  # sanity floor - nowhere near the old 102F result
 
 
 class TestHeatIndexShapeAndTypes:
