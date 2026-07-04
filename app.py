@@ -148,6 +148,12 @@ def _convert_array(arr_c: np.ndarray, unit: str) -> np.ndarray:
     return arr_c * 9.0 / 5.0 + 32.0 if unit == "F" else arr_c
 
 
+def _convert_delta(delta_c: float, unit: str) -> float:
+    """Convert a temperature *difference* (not an absolute value) - no +32
+    offset, since that only applies to absolute Celsius->Fahrenheit points."""
+    return delta_c * 9.0 / 5.0 if unit == "F" else delta_c
+
+
 def _unit_label(unit: str) -> str:
     return "°F" if unit == "F" else "°C"
 
@@ -660,6 +666,38 @@ _METRIC_META = {
 }
 
 
+_BIAS_MIN_PAIRS = 3
+_BIAS_MATCH_TOLERANCE = pd.Timedelta(minutes=45)
+
+
+def _today_forecast_bias(forecast_series: pd.Series, obs_local: pd.DataFrame,
+                         obs_col: str, today, now_ts: pd.Timestamp) -> tuple[float, int] | None:
+    """
+    Mean (observed - forecast) bias for one station/metric today, using only
+    forecast steps that have already happened, paired with the nearest real
+    observation within 45 min. This is a same-day, same-station empirical
+    correction - not a fitted statistical model - so it's only trustworthy
+    once there are a handful of paired points; returns None otherwise.
+    """
+    past = forecast_series[(forecast_series.index.date == today) & (forecast_series.index <= now_ts)]
+    if past.empty or obs_local.empty:
+        return None
+    obs_today = obs_local[obs_local["valid_local"].dt.date == today].dropna(subset=[obs_col])
+    if obs_today.empty:
+        return None
+
+    fdf = past.rename("forecast").reset_index().rename(columns={"index": "time"}).sort_values("time")
+    odf = (obs_today[["valid_local", obs_col]]
+           .rename(columns={"valid_local": "time", obs_col: "observed"})
+           .sort_values("time"))
+
+    paired = pd.merge_asof(fdf, odf, on="time", direction="nearest",
+                           tolerance=_BIAS_MATCH_TOLERANCE).dropna(subset=["observed"])
+    if len(paired) < _BIAS_MIN_PAIRS:
+        return None
+    return float((paired["observed"] - paired["forecast"]).mean()), len(paired)
+
+
 def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                           time_idx: int, unit: str = "C",
                           metrics: list[str] | None = None) -> go.Figure:
@@ -741,6 +779,24 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         ))
 
         obs_col = {"t2m": "temp_c", "hi": "hi_c"}[key]
+
+        if now_ts is not None and not line_series.empty:
+            bias_result = _today_forecast_bias(gfs_series[key], obs_local, obs_col,
+                                               now_ts.date(), now_ts)
+            if bias_result is not None:
+                bias_c, n_pairs = bias_result
+                corrected = line_series + bias_c
+                bias_disp = _convert_delta(bias_c, unit)
+                fig.add_trace(go.Scatter(
+                    x=corrected.index, y=_convert_array(corrected.values, unit),
+                    mode="lines",
+                    line=dict(color=meta["color"], width=meta["width"] * 0.75, dash="dashdot"),
+                    opacity=0.8,
+                    name=f"{meta['label']} (Bias-Corrected)",
+                    hovertemplate=(f"{meta['label']} (Bias-Corrected, {bias_disp:+.1f}{unit_label} "
+                                   f"vs {n_pairs} obs today): %{{y:.1f}}{unit_label}  "
+                                   f"%{{x|%b %d %I:%M %p}}<extra></extra>"),
+                ))
         if not obs_local.empty:
             obs_points = obs_local.dropna(subset=[obs_col])
             if not obs_points.empty:
