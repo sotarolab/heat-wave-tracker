@@ -887,13 +887,12 @@ def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame)
     Big 'feels like' number + plain-language risk category - the headline
     fact, ahead of the line chart.
 
-    Only kicks in when the selected day/time is itself close to "now" (the
-    default selection) - the forecast can be hours away from "now" and
-    diverge sharply (e.g. a front arriving later this evening), and the
-    headline shouldn't show a calmer forecasted number while it's actually
-    dangerously hot outside right now. If the user has navigated to a
-    different day/time, that explicit choice always wins and shows the
-    forecast for it, observation or not.
+    Always the forecast for the selected day/time, matching the leaderboard
+    and map (previously this swapped in a live observation when the
+    selected time was near "now," which meant the same station at the same
+    nominal moment could show two different numbers depending on which part
+    of the UI you looked at). A fresh real observation, when available, is
+    shown as a distinct secondary line instead of replacing the headline.
     """
     stn = get_station(station_id)
     if stn is None or _GFS_DS is None:
@@ -901,23 +900,10 @@ def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame)
 
     tz  = ZoneInfo(stn.get("tz", "America/New_York"))
     idx = min(int(time_idx or 0), len(_GFS_DS.time) - 1)
-    selected_utc = pd.Timestamp(_GFS_DS.time.values[idx]).tz_localize("UTC")
-    is_near_now  = abs(selected_utc - pd.Timestamp.now(tz="UTC")) <= _HERO_OBS_FRESHNESS
-
-    hi_c = None
-    if is_near_now and not asos_df.empty:
-        obs = asos_df.dropna(subset=["temp_c", "dewpoint_c"])
-        if not obs.empty:
-            latest = obs.loc[obs["valid_utc"].idxmax()]
-            if pd.Timestamp.now(tz="UTC") - latest["valid_utc"] <= _HERO_OBS_FRESHNESS:
-                hi_c = float(heat_index_array([latest["temp_c"]], [latest["dewpoint_c"]])[0])
-                time_label = "Right now"
-
-    if hi_c is None:
-        sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
-        hi_c = float(_GFS_DS["hi"].sel(**sel).isel(time=idx).values)
-        ts_local = selected_utc.tz_convert(tz)
-        time_label = f"{ts_local.strftime('%a %I:%M %p').replace(' 0', ' ')} (forecast)"
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    hi_c = float(_GFS_DS["hi"].sel(**sel).isel(time=idx).values)
+    ts_local = pd.Timestamp(_GFS_DS.time.values[idx]).tz_localize("UTC").tz_convert(tz)
+    time_label = f"{ts_local.strftime('%a %I:%M %p').replace(' 0', ' ')} (forecast)"
 
     unit_label = _unit_label(unit)
     num_fmt = f"{_convert(hi_c, unit):.0f}" if unit == "F" else f"{_convert(hi_c, unit):.1f}"
@@ -929,26 +915,42 @@ def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame)
             break
     desc = RISK_DESCRIPTIONS.get(cat_label, "")
 
+    obs_note = None
+    if not asos_df.empty:
+        obs = asos_df.dropna(subset=["temp_c", "dewpoint_c"])
+        if not obs.empty:
+            latest = obs.loc[obs["valid_utc"].idxmax()]
+            if pd.Timestamp.now(tz="UTC") - latest["valid_utc"] <= _HERO_OBS_FRESHNESS:
+                obs_hi_c = float(heat_index_array([latest["temp_c"]], [latest["dewpoint_c"]])[0])
+                obs_fmt = (f"{_convert(obs_hi_c, unit):.0f}" if unit == "F"
+                           else f"{_convert(obs_hi_c, unit):.1f}")
+                obs_note = f"Actual right now: {obs_fmt}{unit_label}"
+
+    children = [
+        html.Div([
+            html.Span(f"{num_fmt}{unit_label}",
+                      style={"fontSize": "42px", "fontWeight": "700", "color": "#f8fafc"}),
+            html.Span(f"  Feels like  ·  {time_label}",
+                      style={"fontSize": "13px", "color": "#94a3b8", "marginLeft": "8px"}),
+        ]),
+        html.Div([
+            html.Span(cat_label, style={
+                "backgroundColor": cat_color, "color": "#0f172a", "padding": "3px 10px",
+                "borderRadius": "999px", "fontSize": "11px", "fontWeight": "700",
+            }),
+            html.Span(desc, style={"fontSize": "12px", "color": "#94a3b8"}),
+        ], style={"marginTop": "8px", "display": "flex", "alignItems": "center",
+                  "flexWrap": "wrap", "gap": "8px"}),
+    ]
+    if obs_note:
+        children.append(html.Div(obs_note, style={"fontSize": "11px", "color": "#64748b",
+                                                   "marginTop": "6px"}))
+
     return html.Div(
         style={"padding": "14px 18px", "backgroundColor": "#1e293b",
                "borderRadius": "8px", "marginBottom": "10px",
                "border": f"1px solid {cat_color}55"},
-        children=[
-            html.Div([
-                html.Span(f"{num_fmt}{unit_label}",
-                          style={"fontSize": "42px", "fontWeight": "700", "color": "#f8fafc"}),
-                html.Span(f"  Feels like  ·  {time_label}",
-                          style={"fontSize": "13px", "color": "#94a3b8", "marginLeft": "8px"}),
-            ]),
-            html.Div([
-                html.Span(cat_label, style={
-                    "backgroundColor": cat_color, "color": "#0f172a", "padding": "3px 10px",
-                    "borderRadius": "999px", "fontSize": "11px", "fontWeight": "700",
-                }),
-                html.Span(desc, style={"fontSize": "12px", "color": "#94a3b8"}),
-            ], style={"marginTop": "8px", "display": "flex", "alignItems": "center",
-                      "flexWrap": "wrap", "gap": "8px"}),
-        ],
+        children=children,
     )
 
 
