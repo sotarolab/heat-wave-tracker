@@ -690,6 +690,12 @@ def _today_forecast_bias(forecast_series: pd.Series, obs_local: pd.DataFrame,
     odf = (obs_today[["valid_local", obs_col]]
            .rename(columns={"valid_local": "time", obs_col: "observed"})
            .sort_values("time"))
+    # merge_asof requires both sides' datetime64 to share the same storage
+    # unit (e.g. ns vs us) - the GFS series (from xarray/netCDF4) and the
+    # ASOS series (freshly parsed) aren't guaranteed to match, so normalize
+    # explicitly rather than relying on both happening to agree.
+    fdf["time"] = fdf["time"].dt.as_unit("us")
+    odf["time"] = odf["time"].dt.as_unit("us")
 
     paired = pd.merge_asof(fdf, odf, on="time", direction="nearest",
                            tolerance=_BIAS_MATCH_TOLERANCE).dropna(subset=["observed"])
