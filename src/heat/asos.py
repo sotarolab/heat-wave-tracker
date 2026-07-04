@@ -60,7 +60,14 @@ def fetch_station_obs(station_id: str, hours: int = 72) -> pd.DataFrame:
         "latlon":  "no",
         "missing": "M",
         "trace":   "T",
-        "report_type": "3",   # routine hourly METARs only
+        # 3 = routine hourly METAR, 2 = SPECI (issued between routine
+        # reports when conditions change quickly - e.g. a front moving
+        # through). Routine-only meant a fast-changing event could be
+        # invisible for up to an hour; requesting both catches it as soon
+        # as the station itself reports it. (report_type=1 looked like it
+        # should mean "everything" but actually returns a separate 5-minute
+        # AWOS feed with temp/dewpoint blank on this station - not useful.)
+        "report_type": ["2", "3"],
     }
 
     try:

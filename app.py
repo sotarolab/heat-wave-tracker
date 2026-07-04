@@ -123,7 +123,7 @@ else:
 # TTL'd so the app doesn't keep serving an ever-staler snapshot for stations
 # that were clicked once early in the process's lifetime.
 _asos_cache: dict[str, tuple[pd.Timestamp, pd.DataFrame]] = {}
-_ASOS_CACHE_TTL = pd.Timedelta(hours=1)
+_ASOS_CACHE_TTL = pd.Timedelta(minutes=15)
 
 # NWS Daily Climate Report data (actual vs 1991-2020 normal), bulk-fetched
 # once via scripts/fetch_climate_normals.py - not every station has one, so
