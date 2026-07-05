@@ -1,6 +1,6 @@
 {
  "KBOS": {
-  "period_label": "Today",
+  "period_label": "Yesterday",
   "date": "July 4 2026",
   "high_actual_f": 94,
   "high_normal_f": 81,
@@ -28,14 +28,14 @@
   "high_departure_f": 10
  },
  "KPVD": {
-  "period_label": "Today",
+  "period_label": "Yesterday",
   "date": "July 4 2026",
   "high_actual_f": 95,
   "high_normal_f": 83,
   "high_departure_f": 12
  },
  "KBDL": {
-  "period_label": "Today",
+  "period_label": "Yesterday",
   "date": "July 4 2026",
   "high_actual_f": 95,
   "high_normal_f": 85,
@@ -832,13 +832,6 @@
   "high_normal_f": 92,
   "high_departure_f": 4
  },
- "KTUS": {
-  "period_label": "Yesterday",
-  "date": "July 4 2026",
-  "high_actual_f": 100,
-  "high_normal_f": 102,
-  "high_departure_f": -2
- },
  "KPHX": {
   "period_label": "Yesterday",
   "date": "July 4 2026",
@@ -868,18 +861,18 @@
   "high_departure_f": 5
  },
  "KBOI": {
-  "period_label": "Yesterday",
-  "date": "July 4 2026",
-  "high_actual_f": 97,
-  "high_normal_f": 89,
-  "high_departure_f": 8
+  "period_label": "Today",
+  "date": "July 5 2026",
+  "high_actual_f": 77,
+  "high_normal_f": 90,
+  "high_departure_f": -13
  },
  "KTWF": {
-  "period_label": "Yesterday",
-  "date": "July 4 2026",
-  "high_actual_f": 94,
-  "high_normal_f": 85,
-  "high_departure_f": 9
+  "period_label": "Today",
+  "date": "July 5 2026",
+  "high_actual_f": 76,
+  "high_normal_f": 86,
+  "high_departure_f": -10
  },
  "KLWS": {
   "period_label": "Yesterday",
@@ -896,11 +889,11 @@
   "high_departure_f": 4
  },
  "KBIL": {
-  "period_label": "Yesterday",
-  "date": "July 4 2026",
-  "high_actual_f": 92,
-  "high_normal_f": 84,
-  "high_departure_f": 8
+  "period_label": "Today",
+  "date": "July 5 2026",
+  "high_actual_f": 82,
+  "high_normal_f": 85,
+  "high_departure_f": -3
  },
  "KGTF": {
   "period_label": "Yesterday",
@@ -908,13 +901,6 @@
   "high_actual_f": 86,
   "high_normal_f": 80,
   "high_departure_f": 6
- },
- "KMSO": {
-  "period_label": "Yesterday",
-  "date": "July 4 2026",
-  "high_actual_f": 89,
-  "high_normal_f": 81,
-  "high_departure_f": 8
  },
  "KHLN": {
   "period_label": "Yesterday",
