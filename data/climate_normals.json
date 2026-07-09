@@ -252,15 +252,15 @@
   "high_departure_f": 2
  },
  "KMIA": {
-  "period_label": "Yesterday",
-  "date": "July 8 2026",
+  "period_label": "Today",
+  "date": "July 9 2026",
   "high_actual_f": 92,
   "high_normal_f": 90,
   "high_departure_f": 2
  },
  "KFLL": {
-  "period_label": "Yesterday",
-  "date": "July 8 2026",
+  "period_label": "Today",
+  "date": "July 9 2026",
   "high_actual_f": 91,
   "high_normal_f": 90,
   "high_departure_f": 1
@@ -882,11 +882,11 @@
   "high_departure_f": 6
  },
  "KBIL": {
-  "period_label": "Yesterday",
-  "date": "July 8 2026",
-  "high_actual_f": 91,
+  "period_label": "Today",
+  "date": "July 9 2026",
+  "high_actual_f": 83,
   "high_normal_f": 86,
-  "high_departure_f": 5
+  "high_departure_f": -3
  },
  "KGTF": {
   "period_label": "Yesterday",
