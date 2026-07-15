@@ -2316,16 +2316,7 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        # 1800ms, not a device-dependent guess: the bottleneck is server-side
-        # compute for the animation chain (advance_frame + current-time-idx +
-        # update_map, ~620ms measured average against the deployed Render
-        # instance, mostly update_map's field-to-image render), identical for
-        # phone and desktop alike since both hit the same server. A width- or
-        # device-based interval was tried and discarded - screen size has no
-        # relationship to server round-trip time, so it made some clients
-        # faster than the server could reliably keep up with, causing ticks
-        # to queue and frames to visibly skip.
-        dcc.Interval(id="animation-interval", interval=1800, n_intervals=0, disabled=True),
+        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
     ],
 )
 
