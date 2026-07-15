@@ -59,7 +59,6 @@ Gotchas:
 import base64
 import io
 import math
-import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -488,25 +487,22 @@ def _station_placeholder(message: str, height: int = 340) -> go.Figure:
     return fig
 
 
-def _mapbox_figure(
-    data:     np.ndarray,
-    lats:     np.ndarray,
-    lons:     np.ndarray,
-    var_key:  str,
-    title:    str,
-    station_values: list | None = None,
-    uirevision: str = "default",
-    unit: str = "C",
-    selected_station: str | None = None,
-    map_width_px: float | None = None,
-) -> go.Figure:
-    """
-    GFS field as raster image layer on CartoDB Positron, with colored
-    station markers overlaid. Station markers share the field's colorscale
-    so hot stations look red and cool stations look blue - same as the field.
+def _frame_traces(data, lats, lons, var_key, unit, station_values, selected_station,
+                  categories=None, vmin=None, vmax=None):
+    """The per-timestep pieces of the CONUS map: the raster image layer
+    (as a mapbox-layer dict) and the two station-marker traces (halo +
+    colored dots), split out from _mapbox_figure as a single source of
+    truth for "what does timestep X look like."
 
-    For var_key == "risk", the field/markers use the discrete NWS heat-index
-    risk categories instead, with a categorical legend in place of a colorbar.
+    For var_key == "risk", pass categories (from _risk_categories);
+    otherwise pass vmin/vmax. Both already unit-converted by the caller,
+    same as station_values is expected raw (this function converts it).
+
+    Returns
+    -------
+    tuple
+        (image_layer: dict, halo_trace: go.Scattermapbox,
+        marker_trace: go.Scattermapbox)
     """
     is_risk = var_key == "risk"
     west, east   = float(lons.min()), float(lons.max())
@@ -525,12 +521,9 @@ def _mapbox_figure(
     img_data = plot_data[::2, ::2]
 
     if is_risk:
-        categories = _risk_categories(unit)
         img_src = _field_to_risk_image(img_data, categories)
     else:
-        vm = VARIABLE_META[var_key]
-        vmin, vmax = _convert(vm["vmin"], unit), _convert(vm["vmax"], unit)
-        img_src = _field_to_image(img_data, vm["cmap"], vmin, vmax)
+        img_src = _field_to_image(img_data, VARIABLE_META[var_key]["cmap"], vmin, vmax)
 
     if station_values is not None:
         station_values = [_convert(v, unit) for v in station_values]
@@ -538,38 +531,8 @@ def _mapbox_figure(
     image_corners = [
         [west, north], [east, north], [east, south], [west, south],
     ]
-
-    fig = go.Figure()
-
-    if is_risk:
-        # One legend-only ghost trace per category (mapbox has no discrete colorbar).
-        # "No Elevated Risk" is listed first - it's a real category (below Caution),
-        # not missing data, and needs to read that way at a glance.
-        legend_entries = [(NO_RISK_COLOR, NO_RISK_LABEL)] + [(c, l) for _, l, c in categories]
-        for color, label in legend_entries:
-            fig.add_trace(go.Scattermapbox(
-                lat=[89.0], lon=[0.0], mode="markers",
-                marker=dict(size=10, color=color),
-                name=label, showlegend=True, hoverinfo="none",
-            ))
-    else:
-        # Off-screen ghost point carries the continuous colorbar
-        fig.add_trace(go.Scattermapbox(
-            lat=[89.0], lon=[0.0], mode="markers",
-            marker=dict(
-                size=1, color=[(vmin + vmax) / 2],
-                colorscale=vm["plotly"], cmin=vmin, cmax=vmax,
-                showscale=True,
-                colorbar=dict(
-                    title=dict(text=_unit_label(unit), font=dict(color="#cbd5e1")),
-                    thickness=14, len=0.75,
-                    bgcolor="rgba(15,23,42,0.7)",
-                    tickfont=dict(color="#cbd5e1"),
-                    x=1.0,
-                ),
-            ),
-            showlegend=False, hoverinfo="none", opacity=0,
-        ))
+    image_layer = dict(sourcetype="image", source=img_src,
+                       coordinates=image_corners, opacity=0.72, below="traces")
 
     # Station markers - colored by current GFS value at each station
     stn_lats = [s["lat"]  for s in MAJOR_CONUS_STATIONS]
@@ -590,7 +553,7 @@ def _mapbox_figure(
                              colorscale=None, cmin=None, cmax=None,
                              size=_size_for_values(station_values, size_lo, size_hi))
     elif station_values is not None:
-        marker_kwargs = dict(color=station_values, colorscale=vm["plotly"],
+        marker_kwargs = dict(color=station_values, colorscale=VARIABLE_META[var_key]["plotly"],
                              cmin=vmin, cmax=vmax,
                              size=_size_for_values(station_values, size_lo, size_hi))
     else:
@@ -627,11 +590,11 @@ def _mapbox_figure(
         halo_sizes[sel_idx] = sizes_list[sel_idx] + 10
         halo_colors[sel_idx] = "#38bdf8"
 
-    fig.add_trace(go.Scattermapbox(
+    halo_trace = go.Scattermapbox(
         lat=stn_lats, lon=stn_lons, mode="markers",
         marker=dict(size=halo_sizes, color=halo_colors, opacity=0.55),
         hoverinfo="none", showlegend=False,
-    ))
+    )
 
     # Name label for the selected station, folded into the color-marker
     # trace below via per-point text (empty string for everyone else) -
@@ -641,7 +604,7 @@ def _mapbox_figure(
     if sel_idx is not None:
         label_text[sel_idx] = MAJOR_CONUS_STATIONS[sel_idx]["name"]
 
-    fig.add_trace(go.Scattermapbox(
+    marker_trace = go.Scattermapbox(
         lat=stn_lats, lon=stn_lons,
         mode="markers+text" if sel_idx is not None else "markers",
         marker=dict(showscale=False, opacity=0.90, **marker_kwargs),
@@ -652,7 +615,74 @@ def _mapbox_figure(
         hovertext=stn_text,
         hoverinfo="text",
         showlegend=False,
-    ))
+    )
+
+    return image_layer, halo_trace, marker_trace
+
+
+def _mapbox_figure(
+    data:     np.ndarray,
+    lats:     np.ndarray,
+    lons:     np.ndarray,
+    var_key:  str,
+    title:    str,
+    station_values: list | None = None,
+    uirevision: str = "default",
+    unit: str = "C",
+    selected_station: str | None = None,
+    map_width_px: float | None = None,
+) -> go.Figure:
+    """
+    GFS field as raster image layer on CartoDB Positron, with colored
+    station markers overlaid. Station markers share the field's colorscale
+    so hot stations look red and cool stations look blue - same as the field.
+
+    For var_key == "risk", the field/markers use the discrete NWS heat-index
+    risk categories instead, with a categorical legend in place of a colorbar.
+    """
+    is_risk = var_key == "risk"
+    categories = _risk_categories(unit) if is_risk else None
+    vm = VARIABLE_META[var_key] if not is_risk else None
+    vmin, vmax = (_convert(vm["vmin"], unit), _convert(vm["vmax"], unit)) if vm else (None, None)
+
+    fig = go.Figure()
+
+    if is_risk:
+        # One legend-only ghost trace per category (mapbox has no discrete colorbar).
+        # "No Elevated Risk" is listed first - it's a real category (below Caution),
+        # not missing data, and needs to read that way at a glance.
+        legend_entries = [(NO_RISK_COLOR, NO_RISK_LABEL)] + [(c, l) for _, l, c in categories]
+        for color, label in legend_entries:
+            fig.add_trace(go.Scattermapbox(
+                lat=[89.0], lon=[0.0], mode="markers",
+                marker=dict(size=10, color=color),
+                name=label, showlegend=True, hoverinfo="none",
+            ))
+    else:
+        # Off-screen ghost point carries the continuous colorbar
+        fig.add_trace(go.Scattermapbox(
+            lat=[89.0], lon=[0.0], mode="markers",
+            marker=dict(
+                size=1, color=[(vmin + vmax) / 2],
+                colorscale=vm["plotly"], cmin=vmin, cmax=vmax,
+                showscale=True,
+                colorbar=dict(
+                    title=dict(text=_unit_label(unit), font=dict(color="#cbd5e1")),
+                    thickness=14, len=0.75,
+                    bgcolor="rgba(15,23,42,0.7)",
+                    tickfont=dict(color="#cbd5e1"),
+                    x=1.0,
+                ),
+            ),
+            showlegend=False, hoverinfo="none", opacity=0,
+        ))
+
+    image_layer, halo_trace, marker_trace = _frame_traces(
+        data, lats, lons, var_key, unit, station_values, selected_station,
+        categories=categories, vmin=vmin, vmax=vmax,
+    )
+    fig.add_trace(halo_trace)
+    fig.add_trace(marker_trace)
 
     effective_width_px = map_width_px if map_width_px else PAGE_MAX_WIDTH - 48
     # Tracks the same breakpoint mobile.css uses for #field-map's own
@@ -685,10 +715,7 @@ def _mapbox_figure(
             style="carto-positron",
             center=center,
             zoom=zoom,
-            layers=[dict(
-                sourcetype="image", source=img_src,
-                coordinates=image_corners, opacity=0.72, below="traces",
-            )],
+            layers=[image_layer],
             # Caps pan/zoom-out to roughly North America. Without this the
             # map has no minimum zoom, so zooming out wraps the world tiles
             # and shows the CONUS raster floating twice on a repeating map.
@@ -2122,6 +2149,12 @@ _init_label = f"Init: {_GFS_INIT}" if _GFS_DS is not None else "No data"
 _LABEL_STYLE = {"fontWeight": "600", "fontSize": "12px", "color": "#94a3b8",
                 "display": "block", "marginBottom": "4px"}
 _DROPDOWN_STYLE = {"width": "170px", "fontSize": "13px", "color": "#0f172a"}
+_PLAY_BTN_STYLE = {
+    "backgroundColor": "#334155", "color": "#e2e8f0",
+    "border": "1px solid #475569", "borderRadius": "6px",
+    "padding": "6px 14px", "fontSize": "13px", "cursor": "pointer",
+    "flexShrink": "0",
+}
 
 
 def _page_section(bg, border, children):
@@ -2197,12 +2230,8 @@ app.layout = html.Div(
                     html.Div(
                         style={"display": "flex", "alignItems": "center", "gap": "12px"},
                         children=[
-                            html.Button("▶  Play", id="play-btn", n_clicks=0, style={
-                                "backgroundColor": "#334155", "color": "#e2e8f0",
-                                "border": "1px solid #475569", "borderRadius": "6px",
-                                "padding": "6px 14px", "fontSize": "13px", "cursor": "pointer",
-                                "flexShrink": "0",
-                            }),
+                            html.Button("▶  Play", id="play-btn", n_clicks=0,
+                                style=_PLAY_BTN_STYLE),
                             dcc.Slider(
                                 id="time-slider",
                                 min=0, max=_TIME_SLIDER_MAX, step=1, value=_DEFAULT_TIME_IDX,
@@ -2374,14 +2403,6 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        # {"time": epoch seconds, "frame": int} set when Play starts - see
-        # advance_frame, which computes the current frame from elapsed
-        # wall-clock time against this rather than incrementing per tick.
-        dcc.Store(id="animation-start"),
-        # Safe to run fast again on every device: advance_frame no longer
-        # accumulates backlog when a round trip runs long (see its
-        # docstring), so this is purely how often the browser checks in,
-        # not a correctness budget the server has to keep up with.
         dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
     ],
 )
@@ -2405,6 +2426,25 @@ app.clientside_callback(
 
 
 # ── callbacks ─────────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("play-btn", "style"),
+    Input("viewport-width", "data"),
+)
+def toggle_play_button(viewport_width):
+    """Animation is one server round trip per frame (see advance_frame) -
+    fine on desktop, but real, measured round-trip time against the
+    deployed server can't reliably keep pace with it on narrow/mobile
+    connections, visibly falling behind rather than animating smoothly.
+    Rather than ship a feature that's known to misbehave there, Play is
+    hidden entirely on narrow screens - manual slider scrubbing still
+    works everywhere, since it's a single request, not a repeating tick.
+    """
+    style = dict(_PLAY_BTN_STYLE)
+    if (viewport_width or 0) <= MOBILE_WIDTH_BREAKPOINT:
+        style["display"] = "none"
+    return style
+
 
 @app.callback(
     Output("series-selector-wrap", "style"),
@@ -2431,65 +2471,30 @@ def update_current_time_idx(time_idx):
     return time_idx if time_idx is not None else 0
 
 
-# Logical animation pace, decoupled from animation-interval's own polling
-# rate (see advance_frame) - how many ms of forecast-time-slider movement
-# each frame represents, not how often the browser checks whether it's
-# time to advance.
-_ANIMATION_STEP_MS = 800
-
-
 @app.callback(
     Output("animation-interval", "disabled"),
     Output("play-btn", "children"),
-    Output("animation-start", "data"),
     Input("play-btn", "n_clicks"),
     State("animation-interval", "disabled"),
-    State("time-slider", "value"),
     prevent_initial_call=True,
 )
-def toggle_animation(_n_clicks, currently_disabled, current_value):
+def toggle_animation(_n_clicks, currently_disabled):
     if currently_disabled:
-        # Starting: remember wall-clock time and the frame we started
-        # from, so advance_frame can compute where playback should be
-        # *right now* instead of stacking +1 per tick - see its docstring.
-        start = {"time": time.time(), "frame": int(current_value or 0)}
-        return False, "⏸  Pause", start
-    return True, "▶  Play", no_update
+        return False, "⏸  Pause"
+    return True, "▶  Play"
 
 
 @app.callback(
     Output("time-slider", "value"),
     Input("animation-interval", "n_intervals"),
-    State("animation-start", "data"),
+    State("time-slider", "value"),
     State("time-slider", "max"),
     prevent_initial_call=True,
 )
-def advance_frame(_n_intervals, start, max_value):
-    """Computes the current frame from elapsed wall-clock time since Play
-    was pressed, rather than incrementing the previous value by one per
-    tick.
-
-    The tick-based version always did current + 1 regardless of whether
-    the previous tick's map update had actually finished rendering. Once
-    any single round trip ran longer than the tick interval (real,
-    measured behavior against the deployed server, not a hypothetical),
-    every subsequent tick kept adding +1 on top of an already-stale
-    position - the map could never catch up, and the gap between the
-    slider and what was actually displayed grew for as long as animation
-    kept playing. Computing an absolute target from elapsed time instead
-    means a late-arriving response always resolves to wherever playback
-    should be *right now*, not wherever it would be if every tick had
-    landed on schedule - it may visibly skip frames under load rather
-    than smoothly stepping through each one, but it cannot drift
-    indefinitely behind, on any device, regardless of how long a given
-    request takes.
-    """
-    if not start:
-        return no_update
+def advance_frame(_n_intervals, current_value, max_value):
+    current = int(current_value or 0)
     maximum = int(max_value or 0)
-    elapsed_ms = (time.time() - start["time"]) * 1000.0
-    steps = int(elapsed_ms / _ANIMATION_STEP_MS)
-    return (int(start["frame"]) + steps) % (maximum + 1)
+    return (current + 1) % (maximum + 1)
 
 
 def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=None):
