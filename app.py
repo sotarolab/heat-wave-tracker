@@ -483,13 +483,21 @@ def _mapbox_figure(
     plot_data = data[::-1, :] if lats[0] < lats[-1] else data
     plot_data = _convert_array(plot_data, unit)
 
+    # Downsampled just for the image encode: the source grid (113x249)
+    # already exceeds what's visually distinguishable for a smoothed color
+    # field at map display size, and PNG encoding is real per-request CPU
+    # cost, so this cuts payload size (and encode time) roughly 3x with no
+    # visible quality loss. image_corners below maps physical lat/lon
+    # bounds, not pixel count, so it's unaffected by this.
+    img_data = plot_data[::2, ::2]
+
     if is_risk:
         categories = _risk_categories(unit)
-        img_src = _field_to_risk_image(plot_data, categories)
+        img_src = _field_to_risk_image(img_data, categories)
     else:
         vm = VARIABLE_META[var_key]
         vmin, vmax = _convert(vm["vmin"], unit), _convert(vm["vmax"], unit)
-        img_src = _field_to_image(plot_data, vm["cmap"], vmin, vmax)
+        img_src = _field_to_image(img_data, vm["cmap"], vmin, vmax)
 
     if station_values is not None:
         station_values = [_convert(v, unit) for v in station_values]
@@ -759,7 +767,8 @@ def _get_station_daily_peaks(var_key: str = "hi") -> list[tuple]:
     return out
 
 
-def _peak_leaderboard_table(unit: str, top_n_per_day: int = 4) -> html.Div:
+def _peak_leaderboard_table(unit: str, top_n_per_day: int = 4,
+                            selected_station: str | None = None) -> html.Div:
     """Each forecast day's hottest cities by peak forecasted Heat Index,
     broken out day by day - reads as the story of the heat wave moving
     across the country instead of one flat ranking that implies moments
@@ -791,6 +800,7 @@ def _peak_leaderboard_table(unit: str, top_n_per_day: int = 4) -> html.Div:
                     style={"flex": "1", "textAlign": "left", "color": "#e2e8f0",
                            "background": "none", "border": "none", "padding": 0,
                            "font": "inherit", "cursor": "pointer",
+                           "fontWeight": "700" if s["id"] == selected_station else "400",
                            "textDecoration": "underline", "textDecorationColor": "#334155"},
                 ),
                 html.Span(f"{num_fmt}{unit_label}",
@@ -828,7 +838,7 @@ def _risk_source_link() -> html.Span:
 
 
 def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
-                       top_n: int = 15) -> html.Div:
+                       top_n: int = 15, selected_station: str | None = None) -> html.Div:
     """Ranked table of the hottest stations for the currently-displayed day.
 
     Ranks by each station's own peak forecasted Heat Index for that day,
@@ -906,6 +916,7 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
                 style={"flex": "1", "textAlign": "left", "color": "#e2e8f0",
                        "background": "none", "border": "none", "padding": 0,
                        "font": "inherit", "cursor": "pointer",
+                       "fontWeight": "700" if s["id"] == selected_station else "400",
                        "textDecoration": "underline", "textDecorationColor": "#334155"},
             ),
             html.Span(f"{num_fmt}{unit_label}",
@@ -2499,16 +2510,18 @@ def update_map(var_key, time_idx, unit, selected_station, viewport_width):
     Input("current-time-idx",  "data"),
     Input("unit-selector",     "value"),
     Input("leaderboard-mode",  "value"),
+    Input("selected-station",  "data"),
 )
-def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode):
+def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode, selected_station):
     """
     Split off from update_map: the leaderboard's pattern-matched row IDs
-    and the legend don't depend on which station is selected, so they
-    shouldn't rebuild on every map click - only field-map.figure has a
-    single owner now (no allow_duplicate split-callback), which is the
-    more standard Dash pattern and was suspected of being why the
-    highlight ring wasn't reliably rendering in the browser despite the
-    server-side figure data being correct.
+    and the legend don't need field-map.figure's own rebuild-cost concerns
+    (that one's a single-owner callback, no allow_duplicate split, since a
+    dual-owner split was suspected of being why its highlight ring wasn't
+    reliably rendering in the browser). selected_station is still a plain
+    Input here, same as update_map takes it - the leaderboard build itself
+    is cheap (no image encoding), so bolding the selected city's row on
+    every click doesn't carry that same risk.
 
     Two leaderboard modes: "now" is the original slider-position snapshot
     (reshuffles as you scrub/play the animation); "peak" is a stable
@@ -2522,14 +2535,14 @@ def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode):
         return html.Div(), html.Div()
     time_idx = int(time_idx or 0)
     if leaderboard_mode == "peak":
-        leaderboard = _peak_leaderboard_table(unit)
+        leaderboard = _peak_leaderboard_table(unit, selected_station=selected_station)
     else:
         # Day-level label, not the precise instant _et_utc_label gives
         # elsewhere - the ranking below is now a per-day peak, not tied to
         # this exact timestamp, so labeling it down to the minute would
         # overstate the precision of what's actually being shown.
         day_label = _to_et(_GFS_DS.time.values[time_idx]).strftime("%A, %b %d")
-        leaderboard = _leaderboard_table(time_idx, unit, day_label)
+        leaderboard = _leaderboard_table(time_idx, unit, day_label, selected_station=selected_station)
     legend = _risk_legend()
     return leaderboard, legend
 
