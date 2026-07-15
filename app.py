@@ -2316,7 +2316,7 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        dcc.Interval(id="animation-interval", interval=1500, n_intervals=0, disabled=True),
+        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
     ],
 )
 
@@ -2339,6 +2339,26 @@ app.clientside_callback(
 
 
 # ── callbacks ─────────────────────────────────────────────────────────────────
+
+_MOBILE_ANIMATION_MS = 1500
+_DESKTOP_ANIMATION_MS = 800
+# Matches assets/mobile.css's 600px window-width cutoff, net of the
+# ~48px container padding viewport-width already subtracts.
+_MOBILE_WIDTH_BREAKPOINT = 550
+
+
+@app.callback(
+    Output("animation-interval", "interval"),
+    Input("viewport-width", "data"),
+)
+def set_animation_speed(viewport_width):
+    """Only narrow/mobile screens need the slower tick (see update_map's
+    viewport_width note for why: three server round trips plus a ~90KB
+    payload per frame doesn't reliably keep up with 800ms over mobile
+    network latency). Wider screens keep the original, snappier pace."""
+    narrow = (viewport_width or 0) <= _MOBILE_WIDTH_BREAKPOINT
+    return _MOBILE_ANIMATION_MS if narrow else _DESKTOP_ANIMATION_MS
+
 
 @app.callback(
     Output("series-selector-wrap", "style"),
