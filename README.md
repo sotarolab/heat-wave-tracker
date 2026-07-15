@@ -1,5 +1,8 @@
 # US Heat Wave Tracker
 
+[![Tests](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/tests.yml/badge.svg)](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/tests.yml)
+[![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
+
 A live dashboard tracking the July 2026 CONUS heat wave: GFS forecast
 (temperature, Heat Index, NWS risk levels) over 165 US cities, animated
 over the full forecast window, with real observations pulled from
