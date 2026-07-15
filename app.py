@@ -2160,12 +2160,6 @@ _init_label = f"Init: {_GFS_INIT}" if _GFS_DS is not None else "No data"
 _LABEL_STYLE = {"fontWeight": "600", "fontSize": "12px", "color": "#94a3b8",
                 "display": "block", "marginBottom": "4px"}
 _DROPDOWN_STYLE = {"width": "170px", "fontSize": "13px", "color": "#0f172a"}
-_PLAY_BTN_STYLE = {
-    "backgroundColor": "#334155", "color": "#e2e8f0",
-    "border": "1px solid #475569", "borderRadius": "6px",
-    "padding": "6px 14px", "fontSize": "13px", "cursor": "pointer",
-    "flexShrink": "0",
-}
 
 
 def _page_section(bg, border, children):
@@ -2238,19 +2232,12 @@ app.layout = html.Div(
                 ]),
                 html.Div([
                     html.Label("Time", style=_LABEL_STYLE),
-                    html.Div(
-                        style={"display": "flex", "alignItems": "center", "gap": "12px"},
-                        children=[
-                            html.Button("▶  Play", id="play-btn", n_clicks=0,
-                                style=_PLAY_BTN_STYLE),
-                            dcc.Slider(
-                                id="time-slider",
-                                min=0, max=_TIME_SLIDER_MAX, step=1, value=_DEFAULT_TIME_IDX,
-                                marks=_TIME_SLIDER_MARKS,
-                                tooltip={"placement": "bottom", "always_visible": False},
-                                updatemode="mouseup",
-                            ),
-                        ],
+                    dcc.Slider(
+                        id="time-slider",
+                        min=0, max=_TIME_SLIDER_MAX, step=1, value=_DEFAULT_TIME_IDX,
+                        marks=_TIME_SLIDER_MARKS,
+                        tooltip={"placement": "bottom", "always_visible": False},
+                        updatemode="mouseup",
                     ),
                 ], style={"flex": "1", "minWidth": "260px"}),
             ],
@@ -2414,14 +2401,6 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        # 600ms: after upgrading the Render instance (0.5 -> 1 CPU), the
-        # full 3-hop animation chain measures ~260ms average against
-        # production with tight variance (advance_frame ~40ms,
-        # update_current_time_idx ~38ms, update_map ~180ms; worst case
-        # observed ~285ms) - still ~2x margin even at this pace. Revert to
-        # 1800ms (or reconsider whether Play should stay hidden on narrow
-        # screens) if the instance is ever downgraded again.
-        dcc.Interval(id="animation-interval", interval=600, n_intervals=0, disabled=True),
     ],
 )
 
@@ -2468,32 +2447,6 @@ def update_current_time_idx(time_idx):
     # slider needs no separate day-only mode the way the old hour-dropdown
     # did.
     return time_idx if time_idx is not None else 0
-
-
-@app.callback(
-    Output("animation-interval", "disabled"),
-    Output("play-btn", "children"),
-    Input("play-btn", "n_clicks"),
-    State("animation-interval", "disabled"),
-    prevent_initial_call=True,
-)
-def toggle_animation(_n_clicks, currently_disabled):
-    if currently_disabled:
-        return False, "⏸  Pause"
-    return True, "▶  Play"
-
-
-@app.callback(
-    Output("time-slider", "value"),
-    Input("animation-interval", "n_intervals"),
-    State("time-slider", "value"),
-    State("time-slider", "max"),
-    prevent_initial_call=True,
-)
-def advance_frame(_n_intervals, current_value, max_value):
-    current = int(current_value or 0)
-    maximum = int(max_value or 0)
-    return (current + 1) % (maximum + 1)
 
 
 def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=None):
