@@ -90,6 +90,14 @@ CONUS_BBOX = [-127.0, 23.0, -65.0, 51.0]
 PAGE_MAX_WIDTH = 1400
 MAP_HEIGHT     = 620
 
+# Mirrors assets/mobile.css's own #field-map height override, which only
+# applies below a 600px *window* width. viewport-width (see the
+# clientside callback near app.layout) already nets out the ~48px
+# container padding the CSS breakpoint doesn't need to, so the threshold
+# here is shifted by that same amount to stay in sync with the CSS.
+MOBILE_WIDTH_BREAKPOINT = 600 - 48
+MOBILE_MAP_HEIGHT = 380
+
 # Reference timezone for map-level labels (a single CONUS raster snapshot spans
 # 4 zones at once, so there's no true "local" time for it - Eastern is used as
 # the display convention, with UTC alongside for anyone who needs it).
@@ -415,7 +423,7 @@ def _size_for_values(values, vmin: float, vmax: float,
 
 
 def _bbox_zoom_center(bbox: list, width_px: float = PAGE_MAX_WIDTH - 48,
-                      height_px: float = MAP_HEIGHT) -> tuple:
+                      height_px: float = MAP_HEIGHT, north_bias: float = 0.0) -> tuple:
     """
     Mercator-correct "fit bounds" zoom (same approach as Google/Mapbox GL's
     fitBounds): computes the zoom needed to fit the bbox in each dimension
@@ -423,6 +431,19 @@ def _bbox_zoom_center(bbox: list, width_px: float = PAGE_MAX_WIDTH - 48,
     to fit without overflowing either axis. The dcc.Graph container is
     responsive width-wise, so `width_px`/`height_px` are tuned to this app's
     capped page width/map height rather than measured live.
+
+    north_bias : float, optional
+        0 (default) centers the extra margin symmetrically N/S, exactly as
+        before. When the frame's aspect ratio is much taller/narrower than
+        the bbox's own shape (e.g. CONUS's wide ~2.2:1 landscape squeezed
+        into a near-square mobile map), fitting by width alone reveals far
+        more vertical extent than the bbox needs, split evenly N/S - on a
+        US-focused map that means showing as much of Mexico/Central
+        America to the south as ocean/Canada to the north, which reads as
+        broken rather than just "some margin." A positive north_bias
+        shifts that same total extra margin northward instead of
+        splitting it evenly - 1.0 pushes all of it north (no southward
+        excess at all), 0 leaves it symmetric.
     """
     west, south, east, north = bbox
     center = {"lat": (south + north) / 2, "lon": (west + east) / 2}
@@ -439,6 +460,17 @@ def _bbox_zoom_center(bbox: list, width_px: float = PAGE_MAX_WIDTH - 48,
     lng_zoom = math.log2(width_px  / 256.0 / lng_fraction) if lng_fraction > 0 else 21.0
 
     zoom = max(2.0, min(7.5, round(min(lat_zoom, lng_zoom), 1)))
+
+    if north_bias and lat_fraction > 0 and zoom < lat_zoom:
+        shown_lat_fraction = height_px / (256.0 * 2 ** zoom)
+        extra_fraction = shown_lat_fraction - lat_fraction
+        if extra_fraction > 0:
+            # Linear degrees-per-fraction approximation, fine at CONUS's
+            # latitudes (not close enough to the poles for Mercator's
+            # nonlinearity to matter for a UI framing decision like this).
+            extra_degrees = extra_fraction / lat_fraction * (north - south)
+            center["lat"] += north_bias * extra_degrees / 2
+
     return zoom, center
 
 
@@ -621,8 +653,22 @@ def _mapbox_figure(
         showlegend=False,
     ))
 
+    effective_width_px = map_width_px if map_width_px else PAGE_MAX_WIDTH - 48
+    # Tracks the same breakpoint mobile.css uses for #field-map's own
+    # height, so the zoom fit is computed against the actual rendered
+    # aspect ratio rather than assuming the desktop frame's shape.
+    is_narrow = effective_width_px <= MOBILE_WIDTH_BREAKPOINT
+    effective_height_px = MOBILE_MAP_HEIGHT if is_narrow else MAP_HEIGHT
+    # A narrow/near-square mobile frame is a much worse aspect-ratio match
+    # for CONUS's wide landscape shape than desktop's frame is, so fitting
+    # by width (the binding dimension either way) reveals a lot more N/S
+    # margin than CONUS needs - split evenly, that meant showing as much
+    # of Mexico/Central America south as ocean/Canada north, which is what
+    # actually made the map look broken on phones. north_bias pushes most
+    # of that unavoidable extra margin northward instead.
     zoom, center = _bbox_zoom_center(
-        CONUS_BBOX, width_px=map_width_px if map_width_px else PAGE_MAX_WIDTH - 48)
+        CONUS_BBOX, width_px=effective_width_px, height_px=effective_height_px,
+        north_bias=0.85 if is_narrow else 0.0)
 
     fig.update_layout(
         uirevision=uirevision,
@@ -2176,7 +2222,7 @@ app.layout = html.Div(
                 dcc.Graph(
                     id="field-map",
                     style={"height": f"{MAP_HEIGHT}px"},
-                    config={"scrollZoom": True},
+                    config={"scrollZoom": True, "displayModeBar": False},
                 ),
                 html.Label(id="time-label",
                     style={"display": "block", "textAlign": "center",

@@ -6,4 +6,11 @@ html, body {
     #field-map {
         height: 380px !important;
     }
+
+    /* The slider's day-of-week marks overlap into unreadable mush at
+       narrow widths; the time-label above the map already shows the
+       full current date/time, so drop the redundant marks here. */
+    #time-slider .rc-slider-mark-text {
+        display: none;
+    }
 }
