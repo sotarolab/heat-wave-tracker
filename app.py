@@ -41,8 +41,8 @@ Gotchas:
    callback's Outputs, so both are declared once as static layout
    components (with explicit prop-level Outputs) rather than being
    rebuilt inside the dynamically-generated station panel.
-4. The default time-slider position picks whichever forecast step is
-   closest to now, even if that is a few minutes or hours in the past,
+4. The default day/hour dropdown selection picks whichever forecast step
+   is closest to now, even if that is a few minutes or hours in the past,
    rather than always rounding up to the next future step. Confirmed
    live: at 8:30 PM the only forward option under 2-hour GFS resolution
    was 10 PM, whose forecast read noticeably cooler than what conditions
@@ -292,8 +292,8 @@ def _et_utc_label(np_time) -> str:
 def _unique_forecast_days() -> list[tuple]:
     """
     Unique Eastern-local calendar dates spanned by the forecast, each paired
-    with the index of its first GFS timestep (used for the time-slider's
-    day-boundary marks).
+    with the index of its first GFS timestep (used as the day-dropdown
+    value).
     """
     if _GFS_DS is None:
         return []
@@ -313,34 +313,41 @@ def _now_et() -> pd.Timestamp:
     return pd.Timestamp.now(tz=_DISPLAY_TZ)
 
 
-def _default_time_idx() -> int:
+def _hour_options_for_day(day_first_idx: int) -> list[dict]:
     """
-    Index of the closest-to-now forecast step across the whole series - not
-    day-scoped like the old per-day hour-dropdown default was, since the
-    slider spans the entire forecast and "today" isn't a special case at
-    this level anymore. Same don't-round-up-to-next-future reasoning as
-    before: the nearest step is used even if it's a few minutes/hours in
-    the past, rather than always the next future step, which with 2-hour-
-    resolution GFS data could be misleadingly different from current actual
-    conditions (caught in practice: at 8:30 PM the only forward option was
-    10 PM, whose forecast read cooler than what it actually felt like).
+    Hour options for the day containing `day_first_idx`. For today, options
+    older than the single closest-to-now step are dropped - you can't
+    browse back to a stale early-morning hour. But that closest step itself
+    is kept even if it's a few minutes/hours in the past, rather than always
+    rounding up to the next future step: with 2-hour-resolution GFS data,
+    always picking the next future step could be up to just under 2 hours
+    ahead of real time, showing a forecast for later this evening's cooldown
+    while it's still currently hot outside (caught in practice: at 8:30 PM
+    the only option was 10 PM, whose forecast was visibly cooler than
+    actual current conditions).
     """
-    if _GFS_DS is None:
-        return 0
-    now = _now_et()
-    times = _GFS_DS.time.values
-    return int(min(range(len(times)),
-                   key=lambda i: abs((_to_et(times[i]) - now).total_seconds())))
+    date_ = _to_et(_GFS_DS.time.values[int(day_first_idx)]).date()
+    idxs = _day_time_indices(date_)
+    if date_ == _now_et().date():
+        now = _now_et()
+        nearest = min(idxs, key=lambda i: abs((_to_et(_GFS_DS.time.values[i]) - now).total_seconds()))
+        idxs = [i for i in idxs if i >= nearest]
+    return [
+        {"label": _to_et(_GFS_DS.time.values[i]).strftime("%I:%M %p %Z"), "value": i}
+        for i in idxs
+    ]
 
 
-# Precomputed once at startup.
-_TIME_SLIDER_MAX = (len(_GFS_DS.time.values) - 1) if _GFS_DS is not None else 0
-_TIME_SLIDER_MARKS = {
-    idx: {"label": _to_et(_GFS_DS.time.values[idx]).strftime("%a %b %d"),
-         "style": {"fontSize": "10px", "color": "#94a3b8"}}
+# Precomputed once at startup - the day list is identical for every variable.
+_DAY_OPTIONS = [
+    {"label": _to_et(_GFS_DS.time.values[idx]).strftime("%a %b %d"), "value": idx}
     for _, idx in _unique_forecast_days()
-} if _GFS_DS is not None else {}
-_DEFAULT_TIME_IDX = _default_time_idx()
+] if _GFS_DS is not None else []
+_DEFAULT_DAY_VALUE = _DAY_OPTIONS[0]["value"] if _DAY_OPTIONS else None
+_INITIAL_HOUR_OPTIONS = (
+    _hour_options_for_day(_DEFAULT_DAY_VALUE) if _DEFAULT_DAY_VALUE is not None else []
+)
+_DEFAULT_HOUR_VALUE = _INITIAL_HOUR_OPTIONS[0]["value"] if _INITIAL_HOUR_OPTIONS else None
 
 
 # ── figure helpers ────────────────────────────────────────────────────────────
@@ -2231,15 +2238,21 @@ app.layout = html.Div(
                     ),
                 ]),
                 html.Div([
-                    html.Label("Time", style=_LABEL_STYLE),
-                    dcc.Slider(
-                        id="time-slider",
-                        min=0, max=_TIME_SLIDER_MAX, step=1, value=_DEFAULT_TIME_IDX,
-                        marks=_TIME_SLIDER_MARKS,
-                        tooltip={"placement": "bottom", "always_visible": False},
-                        updatemode="mouseup",
+                    html.Label("Day", style=_LABEL_STYLE),
+                    dcc.Dropdown(
+                        id="day-dropdown", options=_DAY_OPTIONS,
+                        value=_DEFAULT_DAY_VALUE, clearable=False,
+                        style=_DROPDOWN_STYLE,
                     ),
-                ], style={"flex": "1", "minWidth": "260px"}),
+                ]),
+                html.Div(id="hour-dropdown-wrap", children=[
+                    html.Label("Time", style=_LABEL_STYLE),
+                    dcc.Dropdown(
+                        id="hour-dropdown", options=_INITIAL_HOUR_OPTIONS,
+                        value=_DEFAULT_HOUR_VALUE, clearable=False,
+                        style=_DROPDOWN_STYLE,
+                    ),
+                ]),
             ],
         )),
 
@@ -2434,19 +2447,40 @@ def toggle_series_selector(station_id):
 
 
 @app.callback(
-    Output("current-time-idx", "data"),
-    Input("time-slider", "value"),
+    Output("hour-dropdown", "options"),
+    Output("hour-dropdown", "value"),
+    Input("day-dropdown", "value"),
 )
-def update_current_time_idx(time_idx):
-    # Plain passthrough - kept as its own Store (rather than pointing every
-    # downstream callback at time-slider.value directly) so update_map,
-    # update_leaderboard_and_legend, and update_station_panel didn't all
-    # need to change when the Day/Time dropdowns became a single slider.
-    # For "risk" mode this is still just a timestamp index - _build_field_map
-    # already derives "which day" from whatever index it's given, so the
-    # slider needs no separate day-only mode the way the old hour-dropdown
-    # did.
-    return time_idx if time_idx is not None else 0
+def update_hour_options(day_first_idx):
+    if _GFS_DS is None or day_first_idx is None:
+        return [], None
+    options = _hour_options_for_day(day_first_idx)
+    return options, options[0]["value"] if options else None
+
+
+@app.callback(
+    Output("hour-dropdown-wrap", "style"),
+    Input("variable-selector", "value"),
+)
+def toggle_hour_dropdown(var_key):
+    # Risk mode operates at day granularity (today's running peak so far -
+    # see _build_field_map), so there's no hour to pick independently.
+    return {"display": "none"} if var_key == "risk" else {}
+
+
+@app.callback(
+    Output("current-time-idx", "data"),
+    Input("day-dropdown", "value"),
+    Input("hour-dropdown", "value"),
+    Input("variable-selector", "value"),
+)
+def update_current_time_idx(day_idx, hour_idx, var_key):
+    # Kept as its own Store (rather than pointing every downstream callback
+    # at the dropdowns directly) so update_map, update_leaderboard_and_legend,
+    # and update_station_panel don't each need to know about both dropdowns.
+    if var_key == "risk":
+        return day_idx if day_idx is not None else 0
+    return hour_idx if hour_idx is not None else (day_idx if day_idx is not None else 0)
 
 
 def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=None):
@@ -2614,15 +2648,22 @@ def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode, sel
     prevent_initial_call=True,
 )
 def select_station(clickData, current):
+    """A click can hit two overlapping traces at once (the halo trace and
+    the marker trace share every station's exact coordinates), and
+    clickData.points lists whichever traces were hit - not necessarily
+    marker-trace-first. The halo trace has no customdata, so blindly
+    reading points[0] would silently no-op whenever the halo happened to
+    be reported first, leaving the selection stuck on whatever last
+    successfully registered. Scan every hit point for the first one that
+    actually carries a station id instead of assuming position 0 is it.
+    """
     if not clickData:
         return current
-    pts = clickData.get("points", [{}])
-    if not pts:
-        return current
-    cdata = pts[0].get("customdata")
-    # Only accept clicks on station markers (customdata = ICAO code starting with K)
-    if cdata and isinstance(cdata, str) and cdata.startswith("K"):
-        return cdata
+    for pt in clickData.get("points", []):
+        cdata = pt.get("customdata")
+        # Only accept clicks on station markers (customdata = ICAO code starting with K)
+        if cdata and isinstance(cdata, str) and cdata.startswith("K"):
+            return cdata
     return current
 
 

@@ -7,14 +7,3 @@ html, body {
         height: 380px !important;
     }
 }
-
-/* The slider's day-of-week marks overlap into unreadable mush well
-   before 600px - phone landscape mode is often 650-900px wide, still
-   too tight for 6 date labels. The time-label above the map already
-   shows the full current date/time, so just drop these below desktop
-   widths rather than chase the exact crowding threshold. */
-@media (max-width: 900px) {
-    #time-slider .rc-slider-mark-text {
-        display: none;
-    }
-}
