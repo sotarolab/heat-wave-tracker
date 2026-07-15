@@ -688,18 +688,22 @@ def _mapbox_figure(
     # Tracks the same breakpoint mobile.css uses for #field-map's own
     # height, so the zoom fit is computed against the actual rendered
     # aspect ratio rather than assuming the desktop frame's shape.
-    is_narrow = effective_width_px <= MOBILE_WIDTH_BREAKPOINT
-    effective_height_px = MOBILE_MAP_HEIGHT if is_narrow else MAP_HEIGHT
-    # A narrow/near-square mobile frame is a much worse aspect-ratio match
-    # for CONUS's wide landscape shape than desktop's frame is, so fitting
-    # by width (the binding dimension either way) reveals a lot more N/S
-    # margin than CONUS needs - split evenly, that meant showing as much
-    # of Mexico/Central America south as ocean/Canada north, which is what
-    # actually made the map look broken on phones. north_bias pushes most
-    # of that unavoidable extra margin northward instead.
+    effective_height_px = (MOBILE_MAP_HEIGHT
+                           if effective_width_px <= MOBILE_WIDTH_BREAKPOINT else MAP_HEIGHT)
+    # Any frame narrower/more square than CONUS's own wide landscape shape
+    # is a worse aspect-ratio match than desktop's, so fitting by width
+    # (the binding dimension whenever this matters at all) reveals more
+    # N/S margin than CONUS needs - split evenly, that meant showing as
+    # much of Mexico/Central America south as ocean/Canada north. This
+    # used to only apply below the portrait breakpoint above, missing
+    # phone landscape widths (600-900px) that are still far more square
+    # than CONUS's ~2.2:1 shape and had the exact same problem. Passing
+    # north_bias unconditionally is safe on desktop too - _bbox_zoom_center
+    # only ever applies it when width is actually the binding dimension
+    # (zoom < lat_zoom), which desktop's frame is wide enough to avoid.
     zoom, center = _bbox_zoom_center(
         CONUS_BBOX, width_px=effective_width_px, height_px=effective_height_px,
-        north_bias=0.85 if is_narrow else 0.0)
+        north_bias=0.85)
 
     fig.update_layout(
         uirevision=uirevision,
@@ -2403,15 +2407,14 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        # 800ms: after upgrading the Render instance (0.5 -> 1 CPU), the
+        # 600ms: after upgrading the Render instance (0.5 -> 1 CPU), the
         # full 3-hop animation chain measures ~260ms average against
         # production with tight variance (advance_frame ~40ms,
-        # update_current_time_idx ~38ms, update_map ~180ms) - over 3x
-        # margin against this interval, comfortably in the safe range
-        # that 1800ms was providing on the old 0.5 CPU tier. Revert to
+        # update_current_time_idx ~38ms, update_map ~180ms; worst case
+        # observed ~285ms) - still ~2x margin even at this pace. Revert to
         # 1800ms (or reconsider whether Play should stay hidden on narrow
         # screens) if the instance is ever downgraded again.
-        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
+        dcc.Interval(id="animation-interval", interval=600, n_intervals=0, disabled=True),
     ],
 )
 
@@ -2434,25 +2437,6 @@ app.clientside_callback(
 
 
 # ── callbacks ─────────────────────────────────────────────────────────────────
-
-@app.callback(
-    Output("play-btn", "style"),
-    Input("viewport-width", "data"),
-)
-def toggle_play_button(viewport_width):
-    """Animation is one server round trip per frame (see advance_frame) -
-    fine on desktop, but real, measured round-trip time against the
-    deployed server can't reliably keep pace with it on narrow/mobile
-    connections, visibly falling behind rather than animating smoothly.
-    Rather than ship a feature that's known to misbehave there, Play is
-    hidden entirely on narrow screens - manual slider scrubbing still
-    works everywhere, since it's a single request, not a repeating tick.
-    """
-    style = dict(_PLAY_BTN_STYLE)
-    if (viewport_width or 0) <= MOBILE_WIDTH_BREAKPOINT:
-        style["display"] = "none"
-    return style
-
 
 @app.callback(
     Output("series-selector-wrap", "style"),
