@@ -465,6 +465,7 @@ def _mapbox_figure(
     uirevision: str = "default",
     unit: str = "C",
     selected_station: str | None = None,
+    map_width_px: float | None = None,
 ) -> go.Figure:
     """
     GFS field as raster image layer on CartoDB Positron, with colored
@@ -612,7 +613,8 @@ def _mapbox_figure(
         showlegend=False,
     ))
 
-    zoom, center = _bbox_zoom_center(CONUS_BBOX)
+    zoom, center = _bbox_zoom_center(
+        CONUS_BBOX, width_px=map_width_px if map_width_px else PAGE_MAX_WIDTH - 48)
 
     fig.update_layout(
         uirevision=uirevision,
@@ -2313,8 +2315,26 @@ app.layout = html.Div(
         # ── hidden components ─────────────────────────────────────────────────
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
-        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
+        dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
+        dcc.Interval(id="animation-interval", interval=1500, n_intervals=0, disabled=True),
     ],
+)
+
+
+# viewport-width defaults to the desktop-sized assumption above (so the
+# server-rendered first paint looks right before any JS has run); this
+# clientside callback then corrects it to the real browser width once on
+# load, so _bbox_zoom_center fits CONUS to the map's actual width instead
+# of assuming a wide desktop frame - without this, a phone in portrait
+# gets a zoom level tuned for ~1350px, cropping the coasts off-screen.
+app.clientside_callback(
+    """
+    function(_) {
+        return Math.max(280, window.innerWidth - 48);
+    }
+    """,
+    Output("viewport-width", "data"),
+    Input("field-map", "id"),
 )
 
 
@@ -2371,7 +2391,7 @@ def advance_frame(_n_intervals, current_value, max_value):
     return (current + 1) % (maximum + 1)
 
 
-def _build_field_map(var_key, time_idx, unit, selected_station):
+def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=None):
     """Figure-construction logic for the map, used by update_map.
     Returns (fig, time_label)."""
     time_idx = int(time_idx or 0)
@@ -2412,7 +2432,7 @@ def _build_field_map(var_key, time_idx, unit, selected_station):
         fig = _mapbox_figure(
             data=data, lats=lats, lons=lons, var_key="risk", title=title,
             station_values=stn_vals, uirevision="conus_risk", unit=unit,
-            selected_station=selected_station,
+            selected_station=selected_station, map_width_px=map_width_px,
         )
         return fig, ts_str
 
@@ -2435,6 +2455,7 @@ def _build_field_map(var_key, time_idx, unit, selected_station):
         uirevision     = f"conus_{var_key}",
         unit           = unit,
         selected_station = selected_station,
+        map_width_px   = map_width_px,
     )
     return fig, ts_str
 
@@ -2446,8 +2467,9 @@ def _build_field_map(var_key, time_idx, unit, selected_station):
     Input("current-time-idx",  "data"),
     Input("unit-selector",     "value"),
     Input("selected-station",  "data"),
+    Input("viewport-width",    "data"),
 )
-def update_map(var_key, time_idx, unit, selected_station):
+def update_map(var_key, time_idx, unit, selected_station, viewport_width):
     """
     Single callback, single owner of field-map.figure, selected_station
     as a normal Input - no allow_duplicate split. Two different attempts
@@ -2456,8 +2478,18 @@ def update_map(var_key, time_idx, unit, selected_station):
     then silently stopped updating on later clicks) despite working when
     invoked directly via the Dash HTTP API - that dual-owner pattern is
     unreliable here, so this reverts to the plain single-callback form.
+
+    viewport_width has to be an Input, not a State: it starts at the
+    desktop-sized default and is corrected once by a clientside callback
+    after the real browser width is known (see below). A State would
+    read that correction too late to matter for first paint - exactly
+    the case that matters most, a phone user opening the map without
+    touching any other control - so this fires once more on load in
+    exchange for the initial render actually being right. It
+    deliberately does not react to later window resizes/rotation, same
+    one-time-measure tradeoff as not adding a resize listener.
     """
-    return _build_field_map(var_key, time_idx, unit, selected_station)
+    return _build_field_map(var_key, time_idx, unit, selected_station, viewport_width)
 
 
 @app.callback(
