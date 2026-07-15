@@ -2327,7 +2327,14 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
+        # One universal interval for every device: the animation chain's
+        # bottleneck is server-side compute on Render (not network, not
+        # device type), so it's identical for phone and PC hitting the
+        # same server. 1500ms is the value confirmed workable on phone
+        # before the image-downsampling change further cut per-frame
+        # payload/compute, so it should now have real margin on top of
+        # that on every device rather than being device-specific.
+        dcc.Interval(id="animation-interval", interval=1500, n_intervals=0, disabled=True),
     ],
 )
 
