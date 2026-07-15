@@ -1,0 +1,9 @@
+html, body {
+    overflow-x: hidden;
+}
+
+@media (max-width: 600px) {
+    #field-map {
+        height: 380px !important;
+    }
+}

@@ -2152,7 +2152,7 @@ app.layout = html.Div(
                             ),
                         ],
                     ),
-                ], style={"flex": "1", "minWidth": "420px"}),
+                ], style={"flex": "1", "minWidth": "260px"}),
             ],
         )),
 
