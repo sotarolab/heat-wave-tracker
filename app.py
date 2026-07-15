@@ -59,6 +59,7 @@ Gotchas:
 import base64
 import io
 import math
+import time
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -2373,14 +2374,15 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        # One universal interval for every device: the animation chain's
-        # bottleneck is server-side compute on Render (not network, not
-        # device type), so it's identical for phone and PC hitting the
-        # same server. 1500ms is the value confirmed workable on phone
-        # before the image-downsampling change further cut per-frame
-        # payload/compute, so it should now have real margin on top of
-        # that on every device rather than being device-specific.
-        dcc.Interval(id="animation-interval", interval=1500, n_intervals=0, disabled=True),
+        # {"time": epoch seconds, "frame": int} set when Play starts - see
+        # advance_frame, which computes the current frame from elapsed
+        # wall-clock time against this rather than incrementing per tick.
+        dcc.Store(id="animation-start"),
+        # Safe to run fast again on every device: advance_frame no longer
+        # accumulates backlog when a round trip runs long (see its
+        # docstring), so this is purely how often the browser checks in,
+        # not a correctness budget the server has to keep up with.
+        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
     ],
 )
 
@@ -2429,30 +2431,65 @@ def update_current_time_idx(time_idx):
     return time_idx if time_idx is not None else 0
 
 
+# Logical animation pace, decoupled from animation-interval's own polling
+# rate (see advance_frame) - how many ms of forecast-time-slider movement
+# each frame represents, not how often the browser checks whether it's
+# time to advance.
+_ANIMATION_STEP_MS = 800
+
+
 @app.callback(
     Output("animation-interval", "disabled"),
     Output("play-btn", "children"),
+    Output("animation-start", "data"),
     Input("play-btn", "n_clicks"),
     State("animation-interval", "disabled"),
+    State("time-slider", "value"),
     prevent_initial_call=True,
 )
-def toggle_animation(_n_clicks, currently_disabled):
+def toggle_animation(_n_clicks, currently_disabled, current_value):
     if currently_disabled:
-        return False, "⏸  Pause"
-    return True, "▶  Play"
+        # Starting: remember wall-clock time and the frame we started
+        # from, so advance_frame can compute where playback should be
+        # *right now* instead of stacking +1 per tick - see its docstring.
+        start = {"time": time.time(), "frame": int(current_value or 0)}
+        return False, "⏸  Pause", start
+    return True, "▶  Play", no_update
 
 
 @app.callback(
     Output("time-slider", "value"),
     Input("animation-interval", "n_intervals"),
-    State("time-slider", "value"),
+    State("animation-start", "data"),
     State("time-slider", "max"),
     prevent_initial_call=True,
 )
-def advance_frame(_n_intervals, current_value, max_value):
-    current = int(current_value or 0)
+def advance_frame(_n_intervals, start, max_value):
+    """Computes the current frame from elapsed wall-clock time since Play
+    was pressed, rather than incrementing the previous value by one per
+    tick.
+
+    The tick-based version always did current + 1 regardless of whether
+    the previous tick's map update had actually finished rendering. Once
+    any single round trip ran longer than the tick interval (real,
+    measured behavior against the deployed server, not a hypothetical),
+    every subsequent tick kept adding +1 on top of an already-stale
+    position - the map could never catch up, and the gap between the
+    slider and what was actually displayed grew for as long as animation
+    kept playing. Computing an absolute target from elapsed time instead
+    means a late-arriving response always resolves to wherever playback
+    should be *right now*, not wherever it would be if every tick had
+    landed on schedule - it may visibly skip frames under load rather
+    than smoothly stepping through each one, but it cannot drift
+    indefinitely behind, on any device, regardless of how long a given
+    request takes.
+    """
+    if not start:
+        return no_update
     maximum = int(max_value or 0)
-    return (current + 1) % (maximum + 1)
+    elapsed_ms = (time.time() - start["time"]) * 1000.0
+    steps = int(elapsed_ms / _ANIMATION_STEP_MS)
+    return (int(start["frame"]) + steps) % (maximum + 1)
 
 
 def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=None):
