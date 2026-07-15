@@ -2403,12 +2403,15 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        # 1800ms, not 800: real measured margin above the deployed Render
-        # instance's own response time for a single frame (~415ms average,
-        # more under jitter/load) - 800ms left too little room and the
-        # slider visibly fell behind the map on any device hitting that
-        # same server, PC included. Less snappy, but stays in sync.
-        dcc.Interval(id="animation-interval", interval=1800, n_intervals=0, disabled=True),
+        # 800ms: after upgrading the Render instance (0.5 -> 1 CPU), the
+        # full 3-hop animation chain measures ~260ms average against
+        # production with tight variance (advance_frame ~40ms,
+        # update_current_time_idx ~38ms, update_map ~180ms) - over 3x
+        # margin against this interval, comfortably in the safe range
+        # that 1800ms was providing on the old 0.5 CPU tier. Revert to
+        # 1800ms (or reconsider whether Play should stay hidden on narrow
+        # screens) if the instance is ever downgraded again.
+        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
     ],
 )
 
