@@ -2403,7 +2403,12 @@ app.layout = html.Div(
         dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
-        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
+        # 1800ms, not 800: real measured margin above the deployed Render
+        # instance's own response time for a single frame (~415ms average,
+        # more under jitter/load) - 800ms left too little room and the
+        # slider visibly fell behind the map on any device hitting that
+        # same server, PC included. Less snappy, but stays in sync.
+        dcc.Interval(id="animation-interval", interval=1800, n_intervals=0, disabled=True),
     ],
 )
 
