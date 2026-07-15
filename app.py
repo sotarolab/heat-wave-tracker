@@ -720,10 +720,17 @@ def _mapbox_figure(
             center=center,
             zoom=zoom,
             layers=[image_layer],
-            # Caps pan/zoom-out to roughly North America. Without this the
-            # map has no minimum zoom, so zooming out wraps the world tiles
-            # and shows the CONUS raster floating twice on a repeating map.
-            bounds=dict(west=-145.0, east=-50.0, south=8.0, north=65.0),
+            # Caps manual pan/zoom-out to a modest margin around CONUS.
+            # Without any bounds the map has no minimum zoom, so zooming
+            # out wraps the world tiles and shows the CONUS raster
+            # floating twice on a repeating map - but the original bounds
+            # here (roughly all of North America, down into Panama) were
+            # far more generous than needed just to prevent that, letting
+            # a manual zoom-out reveal most of Central America and deep
+            # Canada. A tight margin around CONUS_BBOX still leaves enough
+            # room to see the northern Mexico/southern Canada border areas
+            # for context, without opening up the rest of the continent.
+            bounds=dict(west=-132.0, east=-60.0, south=18.0, north=56.0),
         ),
         height=MAP_HEIGHT,
         margin=dict(l=0, r=0, t=30, b=0),
@@ -2509,6 +2516,19 @@ def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=Non
     lats = _GFS_DS.latitude.values
     lons = _GFS_DS.longitude.values
 
+    # Included in uirevision below so a width change big enough to cross
+    # the narrow/wide breakpoint (rotating a phone, most commonly) forces
+    # Plotly to accept the freshly computed zoom/center instead of
+    # preserving whatever view was already showing. uirevision exists to
+    # protect a user's manual pan/zoom across ordinary data updates (time
+    # scrub, unit toggle, station click), which is the right default -
+    # but that same protection was also silently keeping a portrait-sized
+    # zoom level after rotating to landscape, stretched into a much wider
+    # frame with no re-fit, revealing far more area in every direction
+    # than either orientation's fit alone would.
+    effective_width_px = map_width_px if map_width_px else PAGE_MAX_WIDTH - 48
+    width_bucket = "narrow" if effective_width_px <= MOBILE_WIDTH_BREAKPOINT else "wide"
+
     if var_key == "risk":
         local_date = _to_et(_GFS_DS.time.values[time_idx]).date()
         # Running peak through the day, not the whole day's max regardless
@@ -2529,7 +2549,7 @@ def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=Non
         stn_vals = _get_station_risk_values(idxs)
         fig = _mapbox_figure(
             data=data, lats=lats, lons=lons, var_key="risk", title=title,
-            station_values=stn_vals, uirevision="conus_risk", unit=unit,
+            station_values=stn_vals, uirevision=f"conus_risk_{width_bucket}", unit=unit,
             selected_station=selected_station, map_width_px=map_width_px,
         )
         return fig, ts_str
@@ -2550,7 +2570,7 @@ def _build_field_map(var_key, time_idx, unit, selected_station, map_width_px=Non
         var_key        = var_key,
         title          = title,
         station_values = stn_vals,
-        uirevision     = f"conus_{var_key}",
+        uirevision     = f"conus_{var_key}_{width_bucket}",
         unit           = unit,
         selected_station = selected_station,
         map_width_px   = map_width_px,
