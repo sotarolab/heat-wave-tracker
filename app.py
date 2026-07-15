@@ -2673,10 +2673,29 @@ def select_station(clickData, current):
     prevent_initial_call=True,
 )
 def select_station_from_leaderboard(_n_clicks):
+    """
+    Input is pattern-matched (ALL leaderboard-station buttons), which fires
+    this callback not just on a genuine click but also whenever the
+    leaderboard rebuilds and the button *set* changes (a new day/hour/
+    variable/unit selection, or a new leaderboard-mode) - the buttons are
+    freshly recreated DOM elements with n_clicks reset to 0, and Dash's
+    pattern-matching diffing can still report a "trigger" for that
+    component-set change even though nothing was actually clicked.
+    ctx.triggered_id alone can't distinguish a real click from that:
+    checking only the button's *type* resolved to whichever station
+    happened to be first in the freshly rebuilt leaderboard, on every
+    rebuild - overwriting a station just selected on the map a moment
+    earlier back to whatever's currently top-ranked. Requiring the
+    triggered value (n_clicks) to actually be truthy/nonzero is what
+    tells a genuine click apart from a rebuild-triggered no-op.
+    """
     triggered = ctx.triggered_id
-    if isinstance(triggered, dict) and triggered.get("type") == "leaderboard-station":
-        return triggered["index"]
-    return no_update
+    if not (isinstance(triggered, dict) and triggered.get("type") == "leaderboard-station"):
+        return no_update
+    triggered_value = ctx.triggered[0]["value"] if ctx.triggered else None
+    if not triggered_value:
+        return no_update
+    return triggered["index"]
 
 
 @app.callback(
