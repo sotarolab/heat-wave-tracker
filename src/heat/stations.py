@@ -1,8 +1,19 @@
 """
 src/heat/stations.py
-====================
-~200 major CONUS ASOS stations with lat/lon for map markers and GFS lookups.
-IEM ASOS station IDs (4-letter ICAO).
+=====================
+165 major CONUS ASOS stations with lat/lon for map markers and GFS
+lookups, keyed by 4-letter ICAO code.
+
+Two entries (Huntington WV and Flagstaff AZ) originally had wrong ICAO
+codes, found while resolving stations against IEM's station metadata
+API for the historical archive (see src/heat/historical.py). Both were
+silently returning 0 live observations before the fix, since the wrong
+codes did not match any real IEM record under any network. Corrected
+in place here, with a comment at each entry. A third station, KPBI
+(West Palm Beach Intl), has a correct ICAO code that IEM simply does
+not index under that string, that one is handled as a fetch-only alias
+in src/heat/asos.py instead of a rename here, since KPBI is the code
+that should be shown to users.
 """
 
 MAJOR_CONUS_STATIONS = [
@@ -35,7 +46,11 @@ MAJOR_CONUS_STATIONS = [
     {"id": "KRIC", "name": "Richmond VA",           "lat": 37.505, "lon": -77.319, "state": "VA", "tz": "America/New_York"},
     {"id": "KCHO", "name": "Charlottesville VA",    "lat": 38.139, "lon": -78.452, "state": "VA", "tz": "America/New_York"},
     {"id": "KCKB", "name": "Clarksburg WV",         "lat": 39.346, "lon": -80.228, "state": "WV", "tz": "America/New_York"},
-    {"id": "KHTW", "name": "Huntington WV",         "lat": 38.367, "lon": -82.558, "state": "WV", "tz": "America/New_York"},
+    # ICAO is KHTS (Tri-State/Milton J. Ferguson Field), not KHTW - "KHTW"
+    # isn't a real IEM ASOS station under any network, so this station was
+    # silently returning 0 observations in the live app until caught while
+    # building the historical climate archive.
+    {"id": "KHTS", "name": "Huntington WV",         "lat": 38.367, "lon": -82.558, "state": "WV", "tz": "America/New_York"},
     # ── Southeast ─────────────────────────────────────────────────────────────
     {"id": "KRDU", "name": "Raleigh-Durham NC",    "lat": 35.877, "lon": -78.787, "state": "NC", "tz": "America/New_York"},
     {"id": "KGSO", "name": "Greensboro NC",         "lat": 36.097, "lon": -79.937, "state": "NC", "tz": "America/New_York"},
@@ -148,7 +163,9 @@ MAJOR_CONUS_STATIONS = [
     {"id": "KTUS", "name": "Tucson AZ",             "lat": 32.117, "lon": -110.941, "state": "AZ", "tz": "America/Phoenix"},
     {"id": "KPHX", "name": "Phoenix AZ",            "lat": 33.438, "lon": -112.013, "state": "AZ", "tz": "America/Phoenix"},
     {"id": "KYUM", "name": "Yuma AZ",               "lat": 32.657, "lon": -114.606, "state": "AZ", "tz": "America/Phoenix"},
-    {"id": "KFGZ", "name": "Flagstaff AZ",          "lat": 35.138, "lon": -111.671, "state": "AZ", "tz": "America/Phoenix"},
+    # ICAO is KFLG (Flagstaff Pulliam), not KFGZ - same silent-0-obs issue
+    # as KHTS above, caught the same way.
+    {"id": "KFLG", "name": "Flagstaff AZ",          "lat": 35.138, "lon": -111.671, "state": "AZ", "tz": "America/Phoenix"},
     {"id": "KSLC", "name": "Salt Lake City UT",     "lat": 40.788, "lon": -111.980, "state": "UT", "tz": "America/Denver"},
     {"id": "KLAS", "name": "Las Vegas NV",          "lat": 36.080, "lon": -115.152, "state": "NV", "tz": "America/Los_Angeles"},
     {"id": "KRNO", "name": "Reno NV",               "lat": 39.499, "lon": -119.768, "state": "NV", "tz": "America/Los_Angeles"},
@@ -193,4 +210,17 @@ _STATION_LOOKUP = {s["id"]: s for s in MAJOR_CONUS_STATIONS}
 
 
 def get_station(station_id: str) -> dict | None:
+    """Look up one station's catalog entry by ICAO code.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code, e.g. "KDCA".
+
+    Returns
+    -------
+    dict or None
+        None if station_id is not in MAJOR_CONUS_STATIONS. Otherwise
+        the matching dict, with keys id, name, lat, lon, state, tz.
+    """
     return _STATION_LOOKUP.get(station_id)

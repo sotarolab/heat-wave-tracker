@@ -1,16 +1,60 @@
 """
 heat-wave-tracker / app.py
-===========================
-CONUS heat wave dashboard - GFS surface field with station click panel.
+============================
+CONUS heat wave dashboard. GFS surface field on a map, with a station
+click panel showing the forecast, real ASOS observations, a same-day
+bias correction, a Brier score / RMSE verification summary, and a GEV
+return-period estimate against each station's own historical record.
 
-Variables: 2m Temperature | Heat Index (NWS) | Risk Level (NWS heat index
-categories, daily max)
+Variables: 2m Temperature, Heat Index (NWS), Risk Level (NWS heat index
+categories, daily max).
 
 Run locally:
     python app.py
 
 On Render (Gunicorn):
     gunicorn app:server
+
+Gotchas:
+
+1. GFS times are stored tz-naive but represent UTC. The map always
+   displays Eastern Time (a single CONUS raster snapshot spans 4 time
+   zones at once, so there is no true "local" time for it), while each
+   station panel shows that station's own local time. These two clocks
+   can look "desynced" even when both are correct, confirmed live with
+   Yuma, AZ, which does not observe DST: the map's "4:00 AM EDT" and
+   the station's own "1:00 AM" were the same instant, but nothing said
+   so. Fixed by leading with Eastern Time everywhere station-local time
+   is shown too, with the local time in parentheses only when it
+   actually differs from Eastern.
+2. Scattermapbox station highlighting does not reliably update the
+   position of a newly created overlay trace across Plotly.react()
+   calls without a paid Mapbox token, confirmed live after several
+   failed attempts at the more obvious approach. The fix used here
+   bakes highlight state into the per-point size/color arrays of
+   already-existing, already-reliable traces instead of adding a
+   separate overlay trace per selection.
+3. A single Dash callback cannot both consume a component as an Input
+   and structurally recreate that same component as part of its
+   output's children. bias-window-dropdown and bias-display-mode are
+   both Inputs to update_station_panel and are also driven by that same
+   callback's Outputs, so both are declared once as static layout
+   components (with explicit prop-level Outputs) rather than being
+   rebuilt inside the dynamically-generated station panel.
+4. The default time-slider position picks whichever forecast step is
+   closest to now, even if that is a few minutes or hours in the past,
+   rather than always rounding up to the next future step. Confirmed
+   live: at 8:30 PM the only forward option under 2-hour GFS resolution
+   was 10 PM, whose forecast read noticeably cooler than what conditions
+   actually felt like at 8:30 PM.
+5. The hero tile, leaderboard, and map always show the forecast value
+   for the selected time, never a live-swapped real observation, even
+   when the selected time is close to now. An earlier version swapped
+   in a live observation near "now," which meant the same station at
+   the same nominal moment could show two different numbers depending
+   on which part of the UI you looked at. A fresh real observation is
+   shown as a clearly labeled secondary line instead of replacing the
+   forecast headline.
 """
 import base64
 import io
@@ -30,6 +74,10 @@ from src.heat.gfs_conus import load_or_fetch, DEFAULT_OUT
 from src.heat.stations  import MAJOR_CONUS_STATIONS, get_station
 from src.heat.asos      import fetch_station_obs
 from src.heat.compute   import heat_index_array
+from src.heat.bias      import (today_forecast_bias, brier_score_exceedance,
+                                BIAS_MIN_PAIRS, BIAS_MATCH_TOLERANCE)
+from src.heat.extremes  import (fit_gev, return_level, return_period, support,
+                                plotting_positions, GEV_MIN_YEARS)
 
 
 # ── constants ─────────────────────────────────────────────────────────────────
@@ -91,6 +139,11 @@ RISK_CATEGORIES_C = [
     for f, label, color in RISK_CATEGORIES_F
 ]
 
+# "Extreme Caution begins" threshold (90F/32C), shared by the station
+# chart's reference line and the Brier score exceedance event so the two
+# can't silently drift apart into different numbers.
+_EXTREME_CAUTION_HI_C = 32.0
+
 # Plain-language versions of NOAA's official heat-index risk definitions,
 # same source NWS/NYT-style heat maps cite, phrased for a non-meteorologist.
 RISK_DESCRIPTIONS = {
@@ -100,6 +153,31 @@ RISK_DESCRIPTIONS = {
     "Danger":           "Heat cramps or exhaustion likely; heat stroke possible if prolonged.",
     "Extreme Danger":   "Heat stroke highly likely.",
 }
+
+# Dewpoint comfort bands - NWS convention, dewpoint rather than relative
+# humidity because RH is misleading for comfort (it's relative to
+# temperature: 90% RH at 60F is a pleasant morning, 90% RH at 85F is
+# dangerous), while dewpoint directly reflects moisture content regardless
+# of temperature.
+DEWPOINT_BANDS_F = [
+    (70.0, "Muggy",      "#f2994a"),
+    (75.0, "Oppressive", "#e8592e"),
+]
+DEWPOINT_BANDS_C = [
+    (round((f - 32.0) * 5.0 / 9.0, 1), label, color)
+    for f, label, color in DEWPOINT_BANDS_F
+]
+
+
+def _dewpoint_band(td_c: float) -> tuple[str, str]:
+    """Plain-language dewpoint comfort band. Returns ('Comfortable', muted
+    color) below the lowest threshold."""
+    label, color = "Comfortable", "#64748b"
+    for lower, lbl, c in DEWPOINT_BANDS_C:
+        if td_c >= lower:
+            label, color = lbl, c
+    return label, color
+
 
 _PANEL_BG   = "#0f172a"
 _PANEL_GRID = "#1e293b"
@@ -136,6 +214,27 @@ if _CLIMATE_NORMALS_PATH.exists():
 else:
     _CLIMATE_NORMALS = {}
 
+# 1972-2025 annual max temperature per station (scripts/fetch_historical_temps.py),
+# used for the GEV return-period popup. Record length varies by station
+# (some ASOS records only start in the 1980s/90s) - each fit reports its
+# own n_years rather than assuming the full range, and GEV fits are
+# skipped below extremes.GEV_MIN_YEARS regardless of what's on disk.
+_CLIMATE_EXTREMES_PATH = Path("data") / "climate_extremes.parquet"
+_GEV_FITS: dict[str, dict] = {}
+_GEV_ANNUAL_MAXIMA: dict[str, np.ndarray] = {}  # raw annual maxima (F), for the histogram overlay
+if _CLIMATE_EXTREMES_PATH.exists():
+    _extremes_df = pd.read_parquet(_CLIMATE_EXTREMES_PATH)
+    for _sid, _grp in _extremes_df.groupby("station"):
+        _fit = fit_gev(_grp["annual_max_temp_f"].values)
+        if _fit is not None:
+            _GEV_FITS[_sid] = _fit
+            _GEV_ANNUAL_MAXIMA[_sid] = _grp["annual_max_temp_f"].values
+    print(f"[app] Historical GEV fits: {len(_GEV_FITS)} stations "
+          f"({len(_extremes_df)} station-years)")
+else:
+    print("[app] No data/climate_extremes.parquet - GEV popup disabled "
+          "(run scripts/fetch_historical_temps.py)")
+
 
 # ── unit helpers ──────────────────────────────────────────────────────────────
 
@@ -156,6 +255,12 @@ def _convert_delta(delta_c: float, unit: str) -> float:
 
 def _unit_label(unit: str) -> str:
     return "°F" if unit == "F" else "°C"
+
+
+def _hex_to_rgba(hex_color: str, alpha: float) -> str:
+    h = hex_color.lstrip("#")
+    r, g, b = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+    return f"rgba({r},{g},{b},{alpha})"
 
 
 def _risk_categories(unit: str) -> list[tuple]:
@@ -179,7 +284,8 @@ def _et_utc_label(np_time) -> str:
 def _unique_forecast_days() -> list[tuple]:
     """
     Unique Eastern-local calendar dates spanned by the forecast, each paired
-    with the index of its first GFS timestep (used as the day-dropdown value).
+    with the index of its first GFS timestep (used for the time-slider's
+    day-boundary marks).
     """
     if _GFS_DS is None:
         return []
@@ -199,41 +305,34 @@ def _now_et() -> pd.Timestamp:
     return pd.Timestamp.now(tz=_DISPLAY_TZ)
 
 
-def _hour_options_for_day(day_first_idx: int) -> list[dict]:
+def _default_time_idx() -> int:
     """
-    Hour options for the day containing `day_first_idx`. For today, options
-    older than the single closest-to-now step are dropped - you can't
-    browse back to a stale early-morning hour. But that closest step itself
-    is kept even if it's a few minutes/hours in the past, rather than always
-    rounding up to the next future step: with 2-hour-resolution GFS data,
-    always picking the next future step could be up to just under 2 hours
-    ahead of real time, showing a forecast for later this evening's cooldown
-    while it's still currently hot outside (caught in practice: at 8:30 PM
-    the only option was 10 PM, whose forecast was visibly cooler than
-    actual current conditions).
+    Index of the closest-to-now forecast step across the whole series - not
+    day-scoped like the old per-day hour-dropdown default was, since the
+    slider spans the entire forecast and "today" isn't a special case at
+    this level anymore. Same don't-round-up-to-next-future reasoning as
+    before: the nearest step is used even if it's a few minutes/hours in
+    the past, rather than always the next future step, which with 2-hour-
+    resolution GFS data could be misleadingly different from current actual
+    conditions (caught in practice: at 8:30 PM the only forward option was
+    10 PM, whose forecast read cooler than what it actually felt like).
     """
-    date_ = _to_et(_GFS_DS.time.values[int(day_first_idx)]).date()
-    idxs = _day_time_indices(date_)
-    if date_ == _now_et().date():
-        now = _now_et()
-        nearest = min(idxs, key=lambda i: abs((_to_et(_GFS_DS.time.values[i]) - now).total_seconds()))
-        idxs = [i for i in idxs if i >= nearest]
-    return [
-        {"label": _to_et(_GFS_DS.time.values[i]).strftime("%I:%M %p ET"), "value": i}
-        for i in idxs
-    ]
+    if _GFS_DS is None:
+        return 0
+    now = _now_et()
+    times = _GFS_DS.time.values
+    return int(min(range(len(times)),
+                   key=lambda i: abs((_to_et(times[i]) - now).total_seconds())))
 
 
-# Precomputed once at startup - the day list is identical for every variable.
-_DAY_OPTIONS = [
-    {"label": _to_et(_GFS_DS.time.values[idx]).strftime("%a %b %d"), "value": idx}
+# Precomputed once at startup.
+_TIME_SLIDER_MAX = (len(_GFS_DS.time.values) - 1) if _GFS_DS is not None else 0
+_TIME_SLIDER_MARKS = {
+    idx: {"label": _to_et(_GFS_DS.time.values[idx]).strftime("%a %b %d"),
+         "style": {"fontSize": "10px", "color": "#94a3b8"}}
     for _, idx in _unique_forecast_days()
-] if _GFS_DS is not None else []
-_DEFAULT_DAY_VALUE = _DAY_OPTIONS[0]["value"] if _DAY_OPTIONS else None
-_INITIAL_HOUR_OPTIONS = (
-    _hour_options_for_day(_DEFAULT_DAY_VALUE) if _DEFAULT_DAY_VALUE is not None else []
-)
-_DEFAULT_HOUR_VALUE = _INITIAL_HOUR_OPTIONS[0]["value"] if _INITIAL_HOUR_OPTIONS else None
+} if _GFS_DS is not None else {}
+_DEFAULT_TIME_IDX = _default_time_idx()
 
 
 # ── figure helpers ────────────────────────────────────────────────────────────
@@ -365,6 +464,7 @@ def _mapbox_figure(
     station_values: list | None = None,
     uirevision: str = "default",
     unit: str = "C",
+    selected_station: str | None = None,
 ) -> go.Figure:
     """
     GFS field as raster image layer on CartoDB Positron, with colored
@@ -463,16 +563,49 @@ def _mapbox_figure(
     # subtle border even on the smallest dots, not a dominant ring that
     # drowns out the size-by-severity signal.
     sizes = marker_kwargs["size"]
-    halo_sizes = [s + 1.5 for s in sizes] if isinstance(sizes, list) else sizes + 1.5
-    fig.add_trace(go.Scattermapbox(
-        lat=stn_lats, lon=stn_lons, mode="markers",
-        marker=dict(size=halo_sizes, color="#0f172a", opacity=0.55),
-        hoverinfo="none", showlegend=False,
-    ))
+    sizes_list = sizes if isinstance(sizes, list) else [sizes] * len(stn_ids)
+    halo_sizes = [s + 1.5 for s in sizes_list]
+
+    # Selection highlight: baked directly into the halo trace's per-point
+    # size/color (bigger + blue instead of the uniform dark navy border)
+    # rather than a separate overlay trace (see module Gotcha 2). Two
+    # prior attempts at a separate ring trace (plain Scattermapbox
+    # marker, and a duplicate-output callback) both showed the ring
+    # correctly on the first selection ever made and then never moved
+    # again on later clicks, even though the server-sent figure JSON
+    # was verified correct every time via direct API calls. The
+    # halo/color traces do not have that problem, their per-point
+    # size/color arrays already update correctly on every render (that
+    # is how station colors track the selected time/variable right
+    # now), so the highlight rides along on a trace already proven to
+    # work.
+    sel_idx = stn_ids.index(selected_station) if selected_station in stn_ids else None
+    halo_colors = ["#0f172a"] * len(stn_ids)
+    if sel_idx is not None:
+        halo_sizes[sel_idx] = sizes_list[sel_idx] + 10
+        halo_colors[sel_idx] = "#38bdf8"
 
     fig.add_trace(go.Scattermapbox(
         lat=stn_lats, lon=stn_lons, mode="markers",
+        marker=dict(size=halo_sizes, color=halo_colors, opacity=0.55),
+        hoverinfo="none", showlegend=False,
+    ))
+
+    # Name label for the selected station, folded into the color-marker
+    # trace below via per-point text (empty string for everyone else) -
+    # same reasoning as the halo: this trace's per-point arrays are
+    # already proven to update reliably, a separate text trace was not.
+    label_text = ["" for _ in stn_ids]
+    if sel_idx is not None:
+        label_text[sel_idx] = MAJOR_CONUS_STATIONS[sel_idx]["name"]
+
+    fig.add_trace(go.Scattermapbox(
+        lat=stn_lats, lon=stn_lons,
+        mode="markers+text" if sel_idx is not None else "markers",
         marker=dict(showscale=False, opacity=0.90, **marker_kwargs),
+        text=label_text,
+        textposition="top center",
+        textfont=dict(size=13, color="#38bdf8"),
         customdata=stn_ids,
         hovertext=stn_text,
         hoverinfo="text",
@@ -513,7 +646,23 @@ def _mapbox_figure(
 
 
 def _get_station_values(var_key: str, time_idx: int) -> list[float] | None:
-    """Extract GFS values (°C) at each station's nearest grid point for the current time step."""
+    """GFS values at each station's nearest grid point, for one time step.
+
+    Parameters
+    ----------
+    var_key : str
+        Data variable name in _GFS_DS, e.g. "t2m" or "hi".
+    time_idx : int
+        Index into _GFS_DS's time dimension. Clamped to the last valid
+        index if out of range.
+
+    Returns
+    -------
+    list of float or None
+        None if _GFS_DS is not loaded or var_key is missing. Otherwise
+        one value per station in MAJOR_CONUS_STATIONS order, degrees C,
+        NaN where a station's lookup fails.
+    """
     if _GFS_DS is None or var_key not in _GFS_DS:
         return None
     da = _GFS_DS[var_key].isel(time=min(time_idx, len(_GFS_DS.time) - 1))
@@ -529,7 +678,20 @@ def _get_station_values(var_key: str, time_idx: int) -> list[float] | None:
 
 
 def _get_station_risk_values(time_idxs: list[int]) -> list[float] | None:
-    """Max Heat Index (°C) at each station's nearest grid point over a set of time steps."""
+    """Max Heat Index at each station's nearest grid point, over a set of time steps.
+
+    Parameters
+    ----------
+    time_idxs : list of int
+        Indices into _GFS_DS's time dimension to take the max over.
+
+    Returns
+    -------
+    list of float or None
+        None if _GFS_DS is not loaded or has no "hi" variable. Otherwise
+        one value per station in MAJOR_CONUS_STATIONS order, degrees C,
+        NaN where a station's lookup fails.
+    """
     if _GFS_DS is None or "hi" not in _GFS_DS:
         return None
     da = _GFS_DS["hi"].isel(time=time_idxs)
@@ -544,6 +706,115 @@ def _get_station_risk_values(time_idxs: list[int]) -> list[float] | None:
     return vals
 
 
+def _get_station_daily_peaks(var_key: str = "hi") -> list[tuple]:
+    """Peak value and time index per station, for each unique forecast day separately.
+
+    Backs the day-by-day "Peak This Event" leaderboard. Deliberately not
+    one global peak across the whole forecast window: a single flat
+    ranking by each station's all-time peak mixed days that are not
+    really comparable, a 112F Wednesday reading and a 108F Sunday
+    reading are not competing for the same "worst" in any meaningful
+    sense, they are two different moments in the heat wave's
+    progression across the country as the ridge moves. Grouping by day
+    makes that progression the organizing structure instead of a fact
+    buried in a "when" column.
+
+    Parameters
+    ----------
+    var_key : str, optional
+        Data variable name in _GFS_DS. Default "hi".
+
+    Returns
+    -------
+    list of tuple
+        [(date, [(station, peak_val, peak_idx), ...]), ...], sorted by
+        date, each day's station list sorted by peak_val descending.
+        Empty list if _GFS_DS is not loaded or var_key is missing.
+    """
+    if _GFS_DS is None or var_key not in _GFS_DS:
+        return []
+    da = _GFS_DS[var_key]
+    out = []
+    for date_, _ in _unique_forecast_days():
+        day_idxs = _day_time_indices(date_)
+        if not day_idxs:
+            continue
+        day_da = da.isel(time=day_idxs)
+        day_rows = []
+        for s in MAJOR_CONUS_STATIONS:
+            try:
+                series = day_da.sel(latitude=s["lat"], longitude=s["lon"],
+                                    method="nearest").values
+                local_peak_pos = int(np.nanargmax(series))
+                peak_val = float(series[local_peak_pos])
+                peak_idx = day_idxs[local_peak_pos]   # map back to the global time index
+            except Exception:
+                continue
+            if not math.isnan(peak_val):
+                day_rows.append((s, round(peak_val, 1), peak_idx))
+        day_rows.sort(key=lambda triple: triple[1], reverse=True)
+        out.append((date_, day_rows))
+    return out
+
+
+def _peak_leaderboard_table(unit: str, top_n_per_day: int = 4) -> html.Div:
+    """Each forecast day's hottest cities by peak forecasted Heat Index,
+    broken out day by day - reads as the story of the heat wave moving
+    across the country instead of one flat ranking that implies moments
+    from different days are directly comparable."""
+    if _GFS_DS is None:
+        return html.Div()
+
+    daily = _get_station_daily_peaks("hi")
+    if not daily:
+        return html.Div()
+
+    unit_label = _unit_label(unit)
+    day_sections = []
+    for date_, day_rows in daily:
+        top_rows = day_rows[:top_n_per_day]
+        if not top_rows:
+            continue
+        row_divs = []
+        for i, (s, hi_c, idx) in enumerate(top_rows, start=1):
+            num_fmt = f"{_convert(hi_c, unit):.0f}" if unit == "F" else f"{_convert(hi_c, unit):.1f}"
+            when = _to_et(_GFS_DS.time.values[idx]).strftime("%I:%M %p").replace(" 0", " ")
+            row_divs.append(html.Div([
+                html.Span(str(i), style={"width": "20px", "color": "#64748b"}),
+                html.Button(
+                    f"{s['name']} ({s['state']})",
+                    id={"type": "leaderboard-station", "index": s["id"]},
+                    n_clicks=0,
+                    title="Click to view this station's forecast + observations",
+                    style={"flex": "1", "textAlign": "left", "color": "#e2e8f0",
+                           "background": "none", "border": "none", "padding": 0,
+                           "font": "inherit", "cursor": "pointer",
+                           "textDecoration": "underline", "textDecorationColor": "#334155"},
+                ),
+                html.Span(f"{num_fmt}{unit_label}",
+                          style={"width": "70px", "textAlign": "right",
+                                 "color": "#f8fafc", "fontWeight": "600"}),
+                html.Span(when, style={"width": "90px", "textAlign": "right", "color": "#94a3b8"}),
+            ], style={"display": "flex", "alignItems": "center", "padding": "5px 10px",
+                      "fontSize": "12px", "borderBottom": "1px solid #1e293b"}))
+
+        day_sections.append(html.Div([
+            html.Div(date_.strftime("%A, %b %d"),
+                     style={"fontSize": "12px", "fontWeight": "700", "color": "#fb923c",
+                            "padding": "8px 10px 4px 10px"}),
+            html.Div(row_divs),
+        ]))
+
+    return html.Div([
+        html.H3("Hottest Cities - Peak This Event",
+                style={"fontSize": "14px", "color": "#f8fafc", "margin": "0 0 4px 0"}),
+        html.Div("Each day's hottest cities by peak forecasted Heat Index - "
+                 "see how the heat moves across the country",
+                 style={"fontSize": "11px", "color": "#64748b", "marginBottom": "4px"}),
+        html.Div(day_sections),
+    ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "12px 14px"})
+
+
 def _risk_source_link() -> html.Span:
     """Citation for the risk categories, placed right next to them (not just
     buried in the page footer) so the source is obvious wherever they appear."""
@@ -556,15 +827,46 @@ def _risk_source_link() -> html.Span:
 
 def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
                        top_n: int = 15) -> html.Div:
-    """
-    Ranked table of the hottest stations right now, by forecasted Heat Index.
-    Ranked by *current forecasted severity*, not historical records - this app
-    has no climate-normals data source, so it can't verify record claims.
+    """Ranked table of the hottest stations for the currently-displayed day.
+
+    Ranks by each station's own peak forecasted Heat Index for that day,
+    not a single instant snapshot at time_idx. A single global timestamp
+    is timezone-unfair: at any given moment, Eastern stations might be
+    sitting near their local afternoon heat peak while Pacific/Mountain
+    stations are still hours away from theirs, so the ranking would
+    mostly reflect which time zone happens to be at its local peak right
+    then, not genuine relative severity. Using each station's own peak
+    across its full local calendar day (the same _day_time_indices and
+    _get_station_risk_values aggregation already used for the risk map)
+    sidesteps that: every station is evaluated at its own worst moment
+    of that day, regardless of time zone. As a side effect this also
+    makes the leaderboard far more stable while the animation plays, it
+    only changes when the slider crosses into a new day, not on every
+    intraday step.
+
+    Parameters
+    ----------
+    time_idx : int
+        Index into _GFS_DS's time dimension, used only to determine
+        which Eastern-local calendar day is currently displayed.
+    unit : str
+        "F" or "C".
+    time_label : str, optional
+        Shown in the panel subtitle.
+    top_n : int, optional
+        How many stations to list. Default 15.
+
+    Returns
+    -------
+    html.Div
+        Empty if _GFS_DS is not loaded.
     """
     if _GFS_DS is None:
         return html.Div()
 
-    vals = _get_station_values("hi", int(time_idx or 0))
+    time_idx = int(time_idx or 0)
+    local_date = _to_et(_GFS_DS.time.values[time_idx]).date()
+    vals = _get_station_risk_values(_day_time_indices(local_date))
     if vals is None:
         return html.Div()
 
@@ -615,12 +917,12 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
         ], style={"display": "flex", "alignItems": "center", "padding": "6px 10px",
                   "fontSize": "12px", "borderBottom": "1px solid #1e293b"}))
 
-    subtitle = "Ranked by forecasted Heat Index"
+    subtitle = "Ranked by each city's own peak forecasted Heat Index this day"
     if time_label:
         subtitle += f"  ·  {time_label}"
 
     return html.Div([
-        html.H3("Hottest Cities Right Now",
+        html.H3("Hottest Cities Today",
                 style={"fontSize": "14px", "color": "#f8fafc", "margin": "0 0 4px 0"}),
         html.Div(subtitle,
                  style={"fontSize": "11px", "color": "#64748b", "marginBottom": "8px"}),
@@ -630,24 +932,35 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
 
 def _risk_legend() -> html.Div:
     """Standalone risk-category legend, placed right under the main map so
-    the color coding is explained wherever it appears on screen."""
+    the color coding is explained wherever it appears on screen. A row of
+    cards (chip above its description, not side by side) rather than an
+    inline-wrapping flow of text - the flow version wrapped mid-sentence
+    at normal window widths, and a single-column stacked list looked too
+    sparse spanning the map's full width."""
     legend_order = [(NO_RISK_LABEL, NO_RISK_COLOR)] + [(label, color) for _, label, color in RISK_CATEGORIES_F]
-    legend_chips = [
-        html.Span([
+    legend_cards = [
+        html.Div([
             html.Span(label, style={
-                "backgroundColor": color, "color": "#0f172a", "padding": "2px 8px",
-                "borderRadius": "999px", "fontSize": "10px", "fontWeight": "700",
-                "marginRight": "6px",
+                "backgroundColor": color, "color": "#0f172a", "padding": "3px 10px",
+                "borderRadius": "999px", "fontSize": "11px", "fontWeight": "700",
+                "display": "inline-block", "marginBottom": "6px",
             }),
-            html.Span(RISK_DESCRIPTIONS.get(label, ""), style={"color": "#64748b"}),
-        ], style={"marginRight": "18px", "whiteSpace": "nowrap"})
+            html.Div(RISK_DESCRIPTIONS.get(label, ""),
+                     style={"color": "#94a3b8", "lineHeight": "1.4"}),
+        ], style={"padding": "10px 12px", "backgroundColor": "#16202f",
+                  "borderRadius": "6px"})
         for label, color in legend_order
     ]
-    legend_chips.append(_risk_source_link())
-    return html.Div(legend_chips,
-                    style={"display": "flex", "flexWrap": "wrap", "gap": "6px 0",
-                           "fontSize": "11px", "margin": "10px 0 0 0", "paddingTop": "10px",
-                           "borderTop": "1px solid #334155"})
+    return html.Div([
+        html.Div(legend_cards, style={
+            "display": "grid",
+            "gridTemplateColumns": "repeat(auto-fit, minmax(200px, 1fr))",
+            "gap": "10px",
+        }),
+        html.Div(_risk_source_link(), style={"paddingTop": "8px"}),
+    ], style={"fontSize": "11.5px", "margin": "10px 0 0 0", "padding": "14px 16px",
+             "border": "1px solid #334155", "borderRadius": "8px",
+             "backgroundColor": "#1e293b"})
 
 
 # ── station panel figure ──────────────────────────────────────────────────────
@@ -661,62 +974,257 @@ DEFAULT_METRICS = ["hi", "t2m"]
 # quantity most people don't intuitively reason about, and doubled the
 # number of things on screen for no real benefit.
 _METRIC_META = {
-    "t2m": {"label": "Actual Temp", "color": "#38bdf8", "width": 1.4, "dash": "dot"},
-    "hi":  {"label": "Feels Like",  "color": "#fb923c", "width": 2.8, "dash": "solid"},
+    "t2m":  {"label": "Actual Temp", "color": "#38bdf8", "width": 1.4, "dash": "dot"},
+    "hi":   {"label": "Feels Like",  "color": "#fb923c", "width": 2.8, "dash": "solid"},
+    "td2m": {"label": "Dewpoint",    "color": "#34d399", "width": 1.6, "dash": "solid"},
 }
 
 
-_BIAS_MIN_PAIRS = 3
-_BIAS_MATCH_TOLERANCE = pd.Timedelta(minutes=45)
+_BIAS_MIN_PAIRS = BIAS_MIN_PAIRS
+_BIAS_MATCH_TOLERANCE = BIAS_MATCH_TOLERANCE
+_today_forecast_bias = today_forecast_bias
+_brier_score_exceedance = brier_score_exceedance
+
+# How far past "now" the 95% PI band is drawn - a same-day bias/sigma
+# estimated from a few hours of today's observations does not have
+# anything meaningful to say about forecast error 5 days out, in a
+# different weather regime entirely. Confirmed live: drawing it flat
+# across the whole forecast horizon made an honestly-tight same-day
+# estimate look alarmingly wide, since the same band gets visually
+# stacked across many days at once.
+_PI_MAX_LEAD_HOURS = 24
+
+# Same-day bias trend: how the computed correction has moved *within
+# today* as more obs arrive, not a multi-day history (that needs the
+# forecast archive - separate, larger project). In-process only, so it
+# resets on redeploy; that's fine, it's meant to answer "is the model
+# getting worse or better as today goes on," not to be a durable record.
+_bias_trend_log: dict[tuple[str, str], list[tuple[pd.Timestamp, float]]] = {}
+_BIAS_TREND_MAX_POINTS = 20
 
 
-def _today_forecast_bias(forecast_series: pd.Series, obs_local: pd.DataFrame,
-                         obs_col: str, today, now_ts: pd.Timestamp) -> tuple[float, int] | None:
+def _log_bias_trend(station_id: str, metric: str, as_of: pd.Timestamp, bias_c: float) -> None:
+    """Append one same-day bias reading to the in-process trend log.
+
+    Deduplicates by observation timestamp and resets automatically at
+    local midnight, so the log always reflects only today's readings
+    for this station/metric.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+    metric : str
+        "hi", "t2m", or "td2m".
+    as_of : pd.Timestamp
+        Timestamp of the observation this bias reading is based on.
+    bias_c : float
+        Bias value to log, degrees C.
     """
-    Mean (observed - forecast) bias for one station/metric today, using only
-    forecast steps that have already happened, paired with the nearest real
-    observation within 45 min. This is a same-day, same-station empirical
-    correction - not a fitted statistical model - so it's only trustworthy
-    once there are a handful of paired points; returns None otherwise.
+    key = (station_id, metric)
+    log = _bias_trend_log.setdefault(key, [])
+    if log and log[-1][0] == as_of:
+        return  # no new obs since the last log entry - do not record a duplicate point
+    if log and log[-1][0].date() != as_of.date():
+        log.clear()  # new calendar day - yesterday's trend is not relevant to today's
+    log.append((as_of, bias_c))
+    if len(log) > _BIAS_TREND_MAX_POINTS:
+        del log[0]
+
+
+def _bias_trend_summary(station_id: str, metric: str, unit: str) -> str:
+    """Human-readable summary of how today's bias has moved so far.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+    metric : str
+        "hi", "t2m", or "td2m".
+    unit : str
+        "F" or "C".
+
+    Returns
+    -------
+    str
+        Something like "+0.4F -> +1.2F" with a direction arrow appended,
+        or an empty string if fewer than 2 points have been logged today.
     """
-    past = forecast_series[(forecast_series.index.date == today) & (forecast_series.index <= now_ts)]
-    if past.empty or obs_local.empty:
-        return None
-    obs_today = obs_local[obs_local["valid_local"].dt.date == today].dropna(subset=[obs_col])
-    if obs_today.empty:
-        return None
+    log = _bias_trend_log.get((station_id, metric), [])
+    if len(log) < 2:
+        return ""
+    first_disp = _convert_delta(log[0][1], unit)
+    last_disp  = _convert_delta(log[-1][1], unit)
+    unit_label = _unit_label(unit)
+    if last_disp > first_disp + 0.3:
+        arrow = "↑"
+    elif last_disp < first_disp - 0.3:
+        arrow = "↓"
+    else:
+        arrow = "→"
+    label = _METRIC_META.get(metric, {}).get("label", metric)
+    return f"{label}: {first_disp:+.1f}{unit_label} → {last_disp:+.1f}{unit_label} {arrow}"
 
-    fdf = past.rename("forecast").reset_index().rename(columns={"index": "time"}).sort_values("time")
-    odf = (obs_today[["valid_local", obs_col]]
-           .rename(columns={"valid_local": "time", obs_col: "observed"})
-           .sort_values("time"))
-    # merge_asof requires both sides' datetime64 to share the same storage
-    # unit (e.g. ns vs us) - the GFS series (from xarray/netCDF4) and the
-    # ASOS series (freshly parsed) aren't guaranteed to match, so normalize
-    # explicitly rather than relying on both happening to agree.
-    fdf["time"] = fdf["time"].dt.as_unit("us")
-    odf["time"] = odf["time"].dt.as_unit("us")
 
-    paired = pd.merge_asof(fdf, odf, on="time", direction="nearest",
-                           tolerance=_BIAS_MATCH_TOLERANCE).dropna(subset=["observed"])
-    if len(paired) < _BIAS_MIN_PAIRS:
+def _station_verification(station_id: str, asos_df: pd.DataFrame) -> dict | None:
+    """Same-day forecast-skill stats for one station.
+
+    N, Bias, and RMSE for Feels Like and Actual Temp, plus a Brier score
+    for Feels Like against the Extreme Caution threshold, the only
+    metric with a real NWS risk threshold to score exceedance against.
+    Grows through the day as real observations arrive, same as the bias
+    correction itself.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+    asos_df : pd.DataFrame
+        Output of fetch_station_obs for this station.
+
+    Returns
+    -------
+    dict or None
+        None if there is not enough same-day data yet for either
+        metric. Otherwise a dict keyed by "hi" and/or "t2m", each value
+        the dict today_forecast_bias returns (plus "brier" for "hi").
+    """
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None or asos_df.empty:
         return None
-    return float((paired["observed"] - paired["forecast"]).mean()), len(paired)
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+
+    obs_local = asos_df.dropna(subset=["temp_c"]).copy()
+    obs_local["valid_local"] = obs_local["valid_utc"].dt.tz_convert(tz)
+    if obs_local.empty:
+        return None
+    has_td = obs_local["dewpoint_c"].notna()
+    obs_local["hi_c"] = float("nan")
+    if has_td.any():
+        obs_local.loc[has_td, "hi_c"] = heat_index_array(
+            obs_local.loc[has_td, "temp_c"].values,
+            obs_local.loc[has_td, "dewpoint_c"].values,
+        )
+    now_ts = obs_local["valid_local"].max()
+
+    stats = {}
+    for key, obs_col in (("hi", "hi_c"), ("t2m", "temp_c")):
+        series = _GFS_DS[key].sel(**sel).to_series()
+        idx = pd.DatetimeIndex(series.index)
+        if idx.tz is None:
+            idx = idx.tz_localize("UTC")
+        series.index = idx.tz_convert(tz)
+        result = _today_forecast_bias(series, obs_local, obs_col, now_ts.date(), now_ts)
+        if result is None:
+            continue
+        row = dict(result)
+        if key == "hi":
+            brier = _brier_score_exceedance(series, obs_local, obs_col,
+                                            now_ts.date(), now_ts, _EXTREME_CAUTION_HI_C)
+            row["brier"] = brier["brier"] if brier else None
+        stats[key] = row
+    return stats or None
+
+
+def _verification_box(station_id: str, unit: str, stats: dict) -> html.Details:
+    """Compact same-day forecast-skill summary, in the spirit of a
+    verification table but scoped to what a single day of one GFS run
+    actually supports - no lead-time buckets (that needs a multi-run
+    archive, a separate/larger project), just today's running N/Bias/RMSE/
+    Brier so far.
+
+    Collapsed by default, like the GEV popup - this is methodology detail
+    for someone auditing the forecast, not something a casual reader needs
+    to see just to check the weather. Keeping it opt-in avoids stacking
+    every analytical block in front of the actual temperature chart.
+    """
+    unit_label = _unit_label(unit)
+    rows = []
+    for key, label in (("hi", "Feels Like"), ("t2m", "Actual Temp")):
+        row = stats.get(key)
+        if row is None:
+            continue
+        bias_disp = _convert_delta(row["bias"], unit)
+        rmse_disp = _convert_delta(row["rmse"], unit)
+        parts = [f"N={row['n_used']}", f"Bias: {bias_disp:+.1f}{unit_label}",
+                 f"RMSE: {rmse_disp:.1f}{unit_label}"]
+        if row.get("brier") is not None:
+            parts.append(f"Brier: {row['brier']:.2f}")
+        rows.append(html.Div([
+            html.Span(f"{label}  ", style={"fontWeight": "700", "color": "#e2e8f0"}),
+            html.Span("  ·  ".join(parts), style={"color": "#94a3b8"}),
+        ], style={"fontSize": "12px", "padding": "2px 0"}))
+
+    if not rows:
+        return html.Details()
+
+    return html.Details([
+        html.Summary("Today's Forecast Skill",
+                     style={"fontSize": "12px", "color": "#94a3b8", "cursor": "pointer"}),
+        html.Div([
+            *rows,
+            html.Div("Same-day, in-sample - not an independent skill score. Grows as today's "
+                     "real observations arrive. Brier scores Feels Like against the Extreme "
+                     "Caution threshold.",
+                     style={"fontSize": "10px", "color": "#64748b", "marginTop": "4px"}),
+        ], style={"padding": "8px 4px 2px 4px"}),
+    ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "10px 12px",
+             "marginBottom": "8px", "border": "1px solid #334155"})
 
 
 def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                           time_idx: int, unit: str = "C",
-                          metrics: list[str] | None = None) -> go.Figure:
-    """GFS forecast + ASOS observations for one station, in the station's own
-    local time zone and display unit. `metrics` (t2m/hi) controls which
-    quantities are plotted."""
+                          metrics: list[str] | None = None,
+                          bias_window_hours: float | None = None,
+                          show_raw: bool = False) -> go.Figure:
+    """GFS forecast and ASOS observations for one station.
+
+    Plotted in the station's own local time zone and chosen display
+    unit. One "best estimate" line per metric, bias-corrected when
+    enough same-day observations exist, the raw model output otherwise,
+    never both lines at once (see show_raw).
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+    asos_df : pd.DataFrame
+        Output of fetch_station_obs for this station. Empty is
+        acceptable, the figure just omits the observed points and bias
+        correction.
+    time_idx : int
+        Index into _GFS_DS's time dimension, used only to place the
+        "viewing forecast for" cursor annotation.
+    unit : str, optional
+        "F" or "C". Default "C".
+    metrics : list of str or None, optional
+        Which of "hi", "t2m", "td2m" to plot. Default DEFAULT_METRICS.
+    bias_window_hours : float or None, optional
+        How far back the bias correction looks, forwarded to
+        today_forecast_bias. None uses all of today (the interactive
+        same-day window control).
+    show_raw : bool, optional
+        If True, plot the unmodified model forecast instead of the
+        bias-corrected line. Full-transparency toggle, still exactly
+        one line at a time.
+
+    Returns
+    -------
+    tuple of (go.Figure, int or None)
+        The figure, and n_available, the minimum same-day pair count
+        across the plotted metrics (None if no metric could be
+        bias-corrected at all). n_available is what the bias-window
+        control uses to decide whether it has anything meaningful to
+        offer yet.
+    """
     if metrics is None:
         metrics = DEFAULT_METRICS
     stn = get_station(station_id)
     if stn is None:
-        return _station_placeholder(f"Station {station_id} not in catalog.")
+        return _station_placeholder(f"Station {station_id} not in catalog."), None
     if _GFS_DS is None:
-        return _station_placeholder("GFS data not loaded.")
+        return _station_placeholder("GFS data not loaded."), None
 
     tz = ZoneInfo(stn.get("tz", "America/New_York"))
     unit_label = _unit_label(unit)
@@ -724,8 +1232,9 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     # Extract GFS time series at station's nearest grid point
     sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
     gfs_series = {
-        "t2m": _GFS_DS["t2m"].sel(**sel).to_series(),
-        "hi":  _GFS_DS["hi"].sel(**sel).to_series(),
+        "t2m":  _GFS_DS["t2m"].sel(**sel).to_series(),
+        "hi":   _GFS_DS["hi"].sel(**sel).to_series(),
+        "td2m": _GFS_DS["td2m"].sel(**sel).to_series(),
     }
 
     def _to_local(idx: pd.DatetimeIndex) -> pd.DatetimeIndex:
@@ -766,8 +1275,9 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                 )
 
     fig = go.Figure()
+    n_available = None   # min across plotted metrics with enough same-day pairs to correct at all
 
-    for key in ("hi", "t2m"):
+    for key in ("hi", "t2m", "td2m"):
         if key not in metrics:
             continue
         meta = _METRIC_META[key]
@@ -775,34 +1285,116 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         if now_ts is not None:
             line_series = line_series[line_series.index > now_ts]
 
-        fig.add_trace(go.Scatter(
-            x=line_series.index, y=_convert_array(line_series.values, unit),
-            mode="lines",
-            line=dict(color=meta["color"], width=meta["width"], dash=meta["dash"]),
-            name=f"{meta['label']} (Forecast)",
-            hovertemplate=f"{meta['label']} (Forecast): %{{y:.1f}}{unit_label}  "
-                          f"%{{x|%b %d %I:%M %p}}<extra></extra>",
-        ))
+        obs_col = {"t2m": "temp_c", "hi": "hi_c", "td2m": "dewpoint_c"}[key]
 
-        obs_col = {"t2m": "temp_c", "hi": "hi_c"}[key]
-
+        # Single "best estimate" forecast line, always present - never a
+        # separate raw line plus a sometimes-there corrected line, which
+        # duplicated the same curve when uncorrected and was easy to miss
+        # when it wasn't. Bias-corrected when enough same-day paired obs
+        # exist to trust a correction (_BIAS_MIN_PAIRS); otherwise this
+        # *is* the raw forecast, unchanged - graceful fallback, not a
+        # gap. Labeled honestly either way so "corrected" never appears
+        # unless a correction was actually applied.
+        bias_result = None
         if now_ts is not None and not line_series.empty:
             bias_result = _today_forecast_bias(gfs_series[key], obs_local, obs_col,
-                                               now_ts.date(), now_ts)
-            if bias_result is not None:
-                bias_c, n_pairs = bias_result
-                corrected = line_series + bias_c
-                bias_disp = _convert_delta(bias_c, unit)
+                                               now_ts.date(), now_ts, window_hours=bias_window_hours)
+            # Trend logging always uses the full-day bias (window_hours=None),
+            # independent of whatever window is currently selected for
+            # display - otherwise switching windows mid-day would mix
+            # differently-computed values into one trend series and the
+            # "is it getting better or worse" read would be meaningless.
+            trend_result = bias_result if bias_window_hours is None else _today_forecast_bias(
+                gfs_series[key], obs_local, obs_col, now_ts.date(), now_ts, window_hours=None)
+            if trend_result is not None:
+                _log_bias_trend(station_id, key, now_ts, trend_result["bias"])
+
+        # n_available tracks regardless of show_raw, so the bias-window
+        # dropdown stays populated/visible even while viewing raw - the
+        # toggle only changes which line is drawn, not whether the
+        # correction machinery is running underneath.
+        if bias_result is not None:
+            n_available = (bias_result["n_available"] if n_available is None
+                           else min(n_available, bias_result["n_available"]))
+
+        if show_raw:
+            best_series = line_series
+            pi95_c = None
+            trace_name = f"{meta['label']} (Forecast, raw)"
+            hover = (f"{meta['label']} (Forecast, raw - not bias-corrected): "
+                     f"%{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>")
+        elif bias_result is not None:
+            bias_c  = bias_result["bias"]
+            pi95_c  = bias_result["pi95_halfwidth"]
+            n_used  = bias_result["n_used"]
+            best_series = line_series + bias_c
+            bias_disp = _convert_delta(bias_c, unit)
+            trace_name = f"{meta['label']} (Bias-Corrected)"
+            hover = (f"{meta['label']} (Bias-Corrected, {bias_disp:+.1f}{unit_label} "
+                     f"vs {n_used} obs today): %{{y:.1f}}{unit_label}  "
+                     f"%{{x|%b %d %I:%M %p}}<extra></extra>")
+        else:
+            best_series = line_series
+            pi95_c = None
+            trace_name = f"{meta['label']} (Forecast)"
+            hover = (f"{meta['label']} (Forecast, not enough obs yet to bias-correct): "
+                     f"%{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>")
+
+        # 95% predictive interval around the corrected line - "error
+        # dressing" of a deterministic forecast (Roulston & Smith 2003),
+        # not NGR/EMOS (Gneiting et al. 2005), which requires an ensemble
+        # and CRPS-trained regression coefficients this app has neither
+        # of. The residuals of the same n same-day points used for the
+        # bias correction are assumed roughly Normal; the half-width
+        # comes from src/heat/bias.py's pi95_halfwidth, which uses a
+        # t-distribution (not a fixed 1.96) since sigma itself is
+        # estimated from as few as BIAS_MIN_PAIRS=3 points, and widens
+        # further for uncertainty in the estimated mean - both matter
+        # most exactly when n is smallest. Shown as an explicit visual
+        # band (so its width is honest about the uncertainty) rather than
+        # baked silently into the line. Labeled "95% PI" (prediction
+        # interval), not "95% CI" - a CI is uncertainty about the
+        # estimated mean, a PI is where a new observation is expected to
+        # fall, which is what this band is actually claiming, and a PI
+        # is necessarily wider than the corresponding CI.
+        #
+        # Two further restrictions beyond "enough same-day points exist"
+        # (PI_MIN_PAIRS, in bias.py):
+        #
+        # 1. Skipped entirely for Feels Like ("hi"). Heat Index is a
+        #    nonlinear, piecewise function of T and Td (see
+        #    src/heat/compute.py: an escalation threshold plus separate
+        #    low/high-humidity adjustment branches), so its same-day
+        #    residuals are less likely to actually be the roughly Normal,
+        #    symmetric errors this interval assumes. Temperature and
+        #    Dewpoint are the more fundamental, directly-observed,
+        #    better-behaved quantities to claim a prediction interval on.
+        # 2. Truncated to _PI_MAX_LEAD_HOURS past "now" for T/Td, not
+        #    drawn flat across the whole multi-day forecast horizon - a
+        #    same-day estimate does not have anything meaningful to say
+        #    about forecast error days out, in what could be a completely
+        #    different weather regime.
+        if pi95_c and key != "hi" and now_ts is not None:
+            band_series = best_series[best_series.index <= now_ts + pd.Timedelta(hours=_PI_MAX_LEAD_HOURS)]
+            if not band_series.empty:
+                upper = _convert_array((band_series + pi95_c).values, unit)
+                lower = _convert_array((band_series - pi95_c).values, unit)
                 fig.add_trace(go.Scatter(
-                    x=corrected.index, y=_convert_array(corrected.values, unit),
-                    mode="lines",
-                    line=dict(color=meta["color"], width=meta["width"] * 0.75, dash="dashdot"),
-                    opacity=0.8,
-                    name=f"{meta['label']} (Bias-Corrected)",
-                    hovertemplate=(f"{meta['label']} (Bias-Corrected, {bias_disp:+.1f}{unit_label} "
-                                   f"vs {n_pairs} obs today): %{{y:.1f}}{unit_label}  "
-                                   f"%{{x|%b %d %I:%M %p}}<extra></extra>"),
+                    x=list(band_series.index) + list(band_series.index[::-1]),
+                    y=list(upper) + list(lower[::-1]),
+                    fill="toself", fillcolor=_hex_to_rgba(meta["color"], 0.12),
+                    line=dict(width=0), hoverinfo="skip", showlegend=True,
+                    name=f"{meta['label']} (95% PI)",
                 ))
+
+        fig.add_trace(go.Scatter(
+            x=best_series.index, y=_convert_array(best_series.values, unit),
+            mode="lines",
+            line=dict(color=meta["color"], width=meta["width"], dash=meta["dash"]),
+            name=trace_name,
+            hovertemplate=hover,
+        ))
+
         if not obs_local.empty:
             obs_points = obs_local.dropna(subset=[obs_col])
             if not obs_points.empty:
@@ -847,7 +1439,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         x0_dt = min(x0_dt, obs_local["valid_local"].min())
     x0, x1 = x0_dt.isoformat(), x1_dt.isoformat()
     for thresh_c, desc, color, requires in [
-        (32.0, "(Extreme Caution begins)", "rgba(241,245,249,0.75)", "hi"),
+        (_EXTREME_CAUTION_HI_C, "(Extreme Caution begins)", "rgba(241,245,249,0.75)", "hi"),
     ]:
         if requires not in metrics:
             continue
@@ -882,23 +1474,71 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         margin=dict(l=46, r=10, t=40, b=76),
         height=340,
     )
-    return fig
+    return fig, n_available
 
 
 _HERO_OBS_FRESHNESS = pd.Timedelta(hours=2)
 
 
-def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame) -> html.Div:
-    """
-    Big 'feels like' number + plain-language risk category - the headline
-    fact, ahead of the line chart.
+def _hero_card(number_text: str, sub_label: str, border_color: str,
+               chip: tuple[str, str] | None, chip_desc: str,
+               extra_lines: list) -> html.Div:
+    """The headline-number card (Feels Like) at the top of the station
+    panel - its own shell function mainly so the number/chip/extra-lines
+    layout stays consistent if another headline card is ever added."""
+    children = [
+        html.Div([
+            html.Span(number_text,
+                      style={"fontSize": "34px", "fontWeight": "700", "color": "#f8fafc"}),
+            html.Span(f"  {sub_label}",
+                      style={"fontSize": "13px", "color": "#94a3b8", "marginLeft": "6px"}),
+        ]),
+    ]
+    if chip is not None:
+        chip_label, chip_color = chip
+        children.append(html.Div([
+            html.Span(chip_label, style={
+                "backgroundColor": chip_color, "color": "#0f172a", "padding": "3px 10px",
+                "borderRadius": "999px", "fontSize": "11px", "fontWeight": "700",
+            }),
+            html.Span(chip_desc, style={"fontSize": "12px", "color": "#94a3b8"}),
+        ], style={"marginTop": "8px", "display": "flex", "alignItems": "center",
+                  "flexWrap": "wrap", "gap": "8px"}))
+    children.extend(extra_lines)
+    return html.Div(children, style={
+        "padding": "12px 18px", "backgroundColor": "#1e293b", "borderRadius": "8px",
+        "border": f"1px solid {border_color}55",
+    })
 
-    Always the forecast for the selected day/time, matching the leaderboard
-    and map (previously this swapped in a live observation when the
-    selected time was near "now," which meant the same station at the same
-    nominal moment could show two different numbers depending on which part
-    of the UI you looked at). A fresh real observation, when available, is
-    shown as a distinct secondary line instead of replacing the headline.
+
+def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame) -> html.Div:
+    """Single "Feels Like" headline card, ahead of the line charts.
+
+    A separate "Temperature" card was tried and dropped. Feels Like and
+    raw temperature usually sit within a degree or two of each other,
+    so two similarly sized headline numbers read as redundant rather
+    than informative. Raw temperature is not lost, it is still in the
+    Temperature & Dewpoint chart below and in the GEV popup's callout.
+
+    Always the forecast for the selected day/time, matching the
+    leaderboard and map, see module Gotcha 5.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+    time_idx : int
+        Index into _GFS_DS's time dimension.
+    unit : str
+        "F" or "C".
+    asos_df : pd.DataFrame
+        Output of fetch_station_obs for this station, used only for
+        the optional "actual right now" secondary line.
+
+    Returns
+    -------
+    html.Div
+        Empty if the station is unknown or _GFS_DS is not loaded.
     """
     stn = get_station(station_id)
     if stn is None or _GFS_DS is None:
@@ -908,11 +1548,26 @@ def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame)
     idx = min(int(time_idx or 0), len(_GFS_DS.time) - 1)
     sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
     hi_c = float(_GFS_DS["hi"].sel(**sel).isel(time=idx).values)
-    ts_local = pd.Timestamp(_GFS_DS.time.values[idx]).tz_localize("UTC").tz_convert(tz)
-    time_label = f"{ts_local.strftime('%a %I:%M %p').replace(' 0', ' ')} (forecast)"
+    np_time  = _GFS_DS.time.values[idx]
+    ts_et    = _to_et(np_time)
+    ts_local = pd.Timestamp(np_time).tz_localize("UTC").tz_convert(tz)
+    # Eastern Time leads (matches the map header, which is always ET) so
+    # the two never look desynced side by side - confirmed live they can
+    # otherwise appear to disagree even when correct (Yuma, AZ doesn't
+    # observe DST, so the map's "04:00 AM EDT" and the station's own
+    # "1:00 AM" are the same instant, but nothing said so). Station-local
+    # time follows in parentheses only when it actually differs from ET -
+    # a DC-area station showing "(1:00 AM local)" next to its own already-
+    # Eastern time would be redundant noise, not a second data point.
+    et_str = ts_et.strftime("%a %I:%M %p %Z").replace(" 0", " ")
+    if tz == _DISPLAY_TZ:
+        time_label = f"{et_str} (forecast)"
+    else:
+        local_str = ts_local.strftime("%I:%M %p %Z").replace(" 0", " ")
+        time_label = f"{et_str} ({local_str} local) (forecast)"
 
     unit_label = _unit_label(unit)
-    num_fmt = f"{_convert(hi_c, unit):.0f}" if unit == "F" else f"{_convert(hi_c, unit):.1f}"
+    hi_fmt = f"{_convert(hi_c, unit):.0f}" if unit == "F" else f"{_convert(hi_c, unit):.1f}"
 
     cat_label, cat_color = NO_RISK_LABEL, NO_RISK_COLOR
     for lower, label, color in reversed(RISK_CATEGORIES_C):
@@ -921,54 +1576,69 @@ def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame)
             break
     desc = RISK_DESCRIPTIONS.get(cat_label, "")
 
-    obs_note = None
+    # Plain text, not a badge - "Comfortable" is the common case (most
+    # dewpoints most of the time), and a badge that fires almost always
+    # reads as noise, not signal. Only Muggy/Oppressive earn a colored
+    # inline call-out.
+    extra_lines = []
+    if "td2m" in _GFS_DS:
+        td_c = float(_GFS_DS["td2m"].sel(**sel).isel(time=idx).values)
+        dp_label, dp_color = _dewpoint_band(td_c)
+        dp_fmt = f"{_convert(td_c, unit):.0f}" if unit == "F" else f"{_convert(td_c, unit):.1f}"
+        dp_spans = [html.Span(f"Dewpoint: {dp_fmt}{unit_label}", style={"color": "#cbd5e1"})]
+        if dp_label != "Comfortable":
+            dp_spans.append(html.Span(f"  {dp_label}", style={
+                "color": dp_color, "marginLeft": "4px", "fontWeight": "600"}))
+        extra_lines.append(html.Div(dp_spans, style={"fontSize": "12px", "marginTop": "6px"}))
+
+    # A fresh real observation gets its own secondary line - never
+    # replacing the forecast headline itself.
     if not asos_df.empty:
         obs = asos_df.dropna(subset=["temp_c", "dewpoint_c"])
         if not obs.empty:
             latest = obs.loc[obs["valid_utc"].idxmax()]
             if pd.Timestamp.now(tz="UTC") - latest["valid_utc"] <= _HERO_OBS_FRESHNESS:
                 obs_hi_c = float(heat_index_array([latest["temp_c"]], [latest["dewpoint_c"]])[0])
-                obs_fmt = (f"{_convert(obs_hi_c, unit):.0f}" if unit == "F"
-                           else f"{_convert(obs_hi_c, unit):.1f}")
-                obs_note = f"Actual right now: {obs_fmt}{unit_label}"
+                obs_hi_fmt = (f"{_convert(obs_hi_c, unit):.0f}" if unit == "F"
+                              else f"{_convert(obs_hi_c, unit):.1f}")
+                extra_lines.append(html.Div(f"Actual right now: {obs_hi_fmt}{unit_label}",
+                                            style={"fontSize": "11px", "color": "#64748b",
+                                                  "marginTop": "6px"}))
 
-    children = [
-        html.Div([
-            html.Span(f"{num_fmt}{unit_label}",
-                      style={"fontSize": "42px", "fontWeight": "700", "color": "#f8fafc"}),
-            html.Span(f"  Feels like  ·  {time_label}",
-                      style={"fontSize": "13px", "color": "#94a3b8", "marginLeft": "8px"}),
-        ]),
-        html.Div([
-            html.Span(cat_label, style={
-                "backgroundColor": cat_color, "color": "#0f172a", "padding": "3px 10px",
-                "borderRadius": "999px", "fontSize": "11px", "fontWeight": "700",
-            }),
-            html.Span(desc, style={"fontSize": "12px", "color": "#94a3b8"}),
-        ], style={"marginTop": "8px", "display": "flex", "alignItems": "center",
-                  "flexWrap": "wrap", "gap": "8px"}),
-    ]
-    if obs_note:
-        children.append(html.Div(obs_note, style={"fontSize": "11px", "color": "#64748b",
-                                                   "marginTop": "6px"}))
+    feels_like_card = _hero_card(
+        f"{hi_fmt}{unit_label}", "Feels like", cat_color,
+        (cat_label, cat_color), desc, extra_lines)
 
-    return html.Div(
-        style={"padding": "14px 18px", "backgroundColor": "#1e293b",
-               "borderRadius": "8px", "marginBottom": "10px",
-               "border": f"1px solid {cat_color}55"},
-        children=children,
-    )
+    return html.Div([
+        html.Div(time_label, style={"fontSize": "14px", "fontWeight": "700",
+                                    "color": "#22d3ee", "marginBottom": "6px"}),
+        html.Div(feels_like_card, style={"maxWidth": "420px"}),
+    ], style={"marginBottom": "10px"})
 
 
 def _climate_context(station_id: str, unit: str) -> html.Div:
     """
     How the day's actual high compares to the 1991-2020 NWS normal for
-    this station, from a bulk-fetched NWS Daily Climate Report (not every
-    station has one - a missing entry just means nothing is shown).
+    this station, from a bulk-fetched NWS Daily Climate Report.
+
+    Not every station has a CLI product (issued per NWS office policy),
+    and coverage fluctuates day to day - a missing entry gets an explicit
+    "unavailable" note rather than silently showing nothing, so it reads
+    as "checked, no data" instead of looking broken.
+
+    The report date is shown explicitly (not just "Today's"/"Yesterday's")
+    because bulk-fetched reports don't all refresh in lockstep - some
+    stations' most recent available report can be several days old if
+    their office hasn't issued a new one, and a relative label would
+    silently imply it's current when it isn't.
     """
     info = _CLIMATE_NORMALS.get(station_id)
     if info is None:
-        return html.Div()
+        return html.Div(
+            "Climate comparison unavailable for this station "
+            "(no NWS daily climate report issued for it).",
+            style={"fontSize": "12px", "color": "#64748b", "marginBottom": "10px"},
+        )
 
     unit_label   = _unit_label(unit)
     actual_disp  = _convert((info["high_actual_f"] - 32) * 5 / 9, unit)
@@ -984,9 +1654,16 @@ def _climate_context(station_id: str, unit: str) -> html.Div:
     else:
         direction, color = "at", "#94a3b8"
 
-    period = "Today's high so far" if info["period_label"] == "Today" else \
-             f"{info['period_label']}'s high"
+    report_date = pd.Timestamp(info["date"]).strftime("%b %d").replace(" 0", " ")
+    in_progress = " so far" if info["period_label"] == "Today" else ""
+    period = f"{report_date} actual-temp high{in_progress}"
 
+    # Explicitly labeled "actual-temp," not just "high" - this comes from
+    # the NWS CLI report, which only ever reports raw temperature, never
+    # Heat Index. Sitting right under the "Feels Like" hero number without
+    # that label, this read as directly contradicting it (e.g. "91F Feels
+    # Like" above "89F, below normal" right below), when the two numbers
+    # are actually different physical quantities, not a contradiction.
     text = (f"{period}: {num_fmt(actual_disp)}{unit_label} - "
             f"{num_fmt(departure_disp)}{unit_label} {direction} the 1991-2020 normal "
             f"({num_fmt(normal_disp)}{unit_label})")
@@ -997,6 +1674,346 @@ def _climate_context(station_id: str, unit: str) -> html.Div:
     )
 
 
+def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
+                             current_temp_c: float | None, unit: str) -> go.Figure:
+    """The classic EVT "return level plot" for one station's GEV fit.
+
+    Temperature (return level) on the y-axis against return period on
+    a log-scaled x-axis, giving the familiar upward-curving shape these
+    are usually drawn as, e.g. NOAA Atlas 14, USGS flood-frequency
+    reports. Return period is the axis itself here, not a value needing
+    its own reference lines or annotations, which sidesteps the label
+    crowding a probability-axis version of this plot needed custom
+    collision handling for in an earlier version.
+
+    Actual annual maxima are overlaid as points at their empirical
+    return period (1 / Gringorten plotting position), the standard way
+    to visually check whether the fitted curve tracks the real data's
+    rank-based probabilities.
+
+    Parameters
+    ----------
+    fit : dict
+        Output of src.heat.extremes.fit_gev.
+    annual_maxima_f : np.ndarray or None
+        Raw annual maxima, degrees F, for the empirical overlay points.
+        None or empty skips that trace.
+    current_temp_c : float or None
+        Currently-viewed forecast temperature, degrees C, marked with a
+        vertical line if its return period falls within the plotted
+        range.
+    unit : str
+        "F" or "C" for axis display.
+
+    Returns
+    -------
+    go.Figure
+    """
+    unit_label = _unit_label(unit)
+    lo_support, hi_support = support(fit)
+
+    periods = np.logspace(np.log10(1.01), np.log10(500), 400)
+    levels_f = np.array([return_level(fit, t) for t in periods])
+    valid = (levels_f >= lo_support) & (levels_f <= hi_support)
+    periods, levels_f = periods[valid], levels_f[valid]
+    levels_disp = _convert_array((levels_f - 32.0) * 5.0 / 9.0, unit)
+
+    fig = go.Figure()
+
+    if annual_maxima_f is not None and len(annual_maxima_f) > 0:
+        emp_values_f, emp_probs = plotting_positions(annual_maxima_f)
+        emp_periods = 1.0 / emp_probs
+        emp_disp = _convert_array((emp_values_f - 32.0) * 5.0 / 9.0, unit)
+        fig.add_trace(go.Scatter(
+            x=emp_periods, y=emp_disp, mode="markers",
+            marker=dict(color="#38bdf8", size=6),
+            name=f"{len(annual_maxima_f)} yrs of actual data",
+            hovertemplate=f"~1-in-%{{x:.0f}}-yr  ·  %{{y:.0f}}{unit_label}<extra></extra>",
+        ))
+
+    fig.add_trace(go.Scatter(
+        x=periods, y=levels_disp, mode="lines",
+        line=dict(color="#fb923c", width=2.5),
+        name="Fitted GEV",
+        hovertemplate=f"~1-in-%{{x:.0f}}-yr  ·  %{{y:.0f}}{unit_label}<extra></extra>",
+    ))
+
+    if current_temp_c is not None:
+        current_f = current_temp_c * 9.0 / 5.0 + 32.0
+        current_period = return_period(fit, current_f)
+        if current_period is not None and periods.min() <= current_period <= periods.max():
+            fig.add_shape(type="line", x0=current_period, x1=current_period,
+                         y0=0, y1=1, yref="paper",
+                         line=dict(color="#f8fafc", width=2, dash="dot"))
+
+    fig.update_layout(
+        paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG,
+        xaxis=dict(title=dict(text="Return period (years)", font=dict(size=10)),
+                  type="log", gridcolor=_PANEL_GRID, color=_PANEL_FONT, tickfont=dict(size=9)),
+        yaxis=dict(title=dict(text=f"Annual max temperature ({unit_label})", font=dict(size=10)),
+                  gridcolor=_PANEL_GRID, color=_PANEL_FONT, tickfont=dict(size=9)),
+        legend=dict(orientation="h", font=dict(size=9, color=_PANEL_FONT),
+                   bgcolor="rgba(0,0,0,0)", x=0, y=-0.3, xanchor="left", yanchor="top"),
+        margin=dict(l=44, r=10, t=24, b=64),
+        height=260,
+    )
+    return fig
+
+
+def _gev_popup(station_id: str, unit: str, current_temp_c: float | None) -> html.Details:
+    """How rare the currently-viewed forecast temperature is, historically.
+
+    Collapsed by default, a real expander, not shown up front. Reads
+    the station's stationary GEV fit against its historical annual
+    maxima, shown as the actual fitted distribution rather than just a
+    number. Stationary only: treats the historical record as one
+    unchanging distribution. Under a warming climate that is a real
+    simplification, a non-stationary fit would let the location
+    parameter trend with year, said explicitly in the caveat text this
+    renders rather than left implicit.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+    unit : str
+        "F" or "C".
+    current_temp_c : float or None
+        Currently-viewed forecast temperature, degrees C, used for the
+        "roughly a 1-in-N-year event" callout sentence.
+
+    Returns
+    -------
+    html.Details
+        Empty (invisible) if no GEV fit exists for this station, either
+        the archive was not built, or the station's record is shorter
+        than extremes.GEV_MIN_YEARS.
+    """
+    fit = _GEV_FITS.get(station_id)
+    if fit is None:
+        return html.Details()
+
+    unit_label = _unit_label(unit)
+    num_fmt = (lambda v: f"{v:.0f}") if unit == "F" else (lambda v: f"{v:.1f}")
+
+    children = []
+    if current_temp_c is not None:
+        current_f = current_temp_c * 9.0 / 5.0 + 32.0
+        period = return_period(fit, current_f)
+        if period is not None:
+            rarity = "an ordinary summer day here" if period < 1.5 \
+                else f"roughly a 1-in-{period:.0f}-year event"
+            current_disp = _convert(current_temp_c, unit)
+            children.append(html.Div(
+                f"The forecast you're viewing ({num_fmt(current_disp)}{unit_label}) is "
+                f"{rarity} at this station, historically.",
+                style={"fontSize": "12px", "color": "#f8fafc", "fontWeight": "600",
+                      "marginBottom": "4px"},
+            ))
+
+    fig = _gev_distribution_figure(fit, _GEV_ANNUAL_MAXIMA.get(station_id),
+                                   current_temp_c, unit)
+    children.append(dcc.Graph(figure=fig, config={"displayModeBar": False}))
+    children.append(html.Div(
+        f"Stationary GEV fit to {fit['n_years']} years of annual max temperature "
+        f"(station record back to 1972 where available). Doesn't account for a warming "
+        f"trend within that record, so long return periods likely understate how often "
+        f"today's extremes will recur going forward.",
+        style={"fontSize": "10px", "color": "#64748b", "marginTop": "4px", "lineHeight": "1.4"},
+    ))
+
+    return html.Details([
+        html.Summary("How rare is this heat, historically? (GEV analysis)",
+                     style={"fontSize": "12px", "color": "#94a3b8", "cursor": "pointer"}),
+        html.Div(children, style={"padding": "8px 4px 2px 4px"}),
+    ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "10px 12px",
+             "marginBottom": "8px", "border": "1px solid #334155"})
+
+
+# Warm-night bands - actual overnight low temperature, not heat index. The
+# body needs nighttime cooling to recover from daytime heat stress; a
+# night that doesn't drop enough is a well-documented driver of heat-
+# related mortality independent of how hot the day itself was (e.g. the
+# 1995 Chicago and 2003 European heat waves).
+WARM_NIGHT_BANDS_F = [
+    (75.0, "Warm Night",      "#f2994a"),
+    (80.0, "Very Warm Night", "#e8592e"),
+]
+WARM_NIGHT_BANDS_C = [
+    (round((f - 32.0) * 5.0 / 9.0, 1), label, color)
+    for f, label, color in WARM_NIGHT_BANDS_F
+]
+
+
+def _warm_night_band(low_c: float) -> tuple[str | None, str | None]:
+    """Plain-language warm-night band for an overnight low temperature.
+
+    Parameters
+    ----------
+    low_c : float
+        Overnight low temperature, degrees C.
+
+    Returns
+    -------
+    tuple of (str or None, str or None)
+        (label, color), both None below the lowest threshold.
+    """
+    label, color = None, None
+    for lower, lbl, c in WARM_NIGHT_BANDS_C:
+        if low_c >= lower:
+            label, color = lbl, c
+    return label, color
+
+
+def _overnight_lows(station_id: str) -> list[dict]:
+    """Per-day overnight low for a station across the whole forecast window.
+
+    Computed in the station's own local time zone, not the app's
+    canonical Eastern day boundaries the leaderboard uses, since warm
+    nights are inherently a local-time concept.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+
+    Returns
+    -------
+    list of dict
+        [{"date": date, "low_c": float}, ...], one entry per forecast
+        day. Empty if the station is unknown or _GFS_DS is not loaded.
+    """
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None:
+        return []
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    t2m_series = _GFS_DS["t2m"].sel(**sel).to_series()
+    idx_local = pd.DatetimeIndex(t2m_series.index)
+    if idx_local.tz is None:
+        idx_local = idx_local.tz_localize("UTC")
+    idx_local = idx_local.tz_convert(tz)
+    t2m_series.index = idx_local
+
+    out = []
+    for date_ in sorted(set(idx_local.date)):
+        day_vals = t2m_series[idx_local.date == date_]
+        if day_vals.empty:
+            continue
+        out.append({"date": date_, "low_c": float(day_vals.min())})
+    return out
+
+
+_RISK_CATEGORY_ORDER = [NO_RISK_LABEL] + [label for _, label, _ in RISK_CATEGORIES_F]
+
+
+def _heat_index_category(hi_c: float) -> str:
+    """NWS risk category label for a Heat Index value.
+
+    Parameters
+    ----------
+    hi_c : float
+        Heat Index, degrees C.
+
+    Returns
+    -------
+    str
+        One of RISK_CATEGORIES_F's labels, or NO_RISK_LABEL below the
+        lowest threshold.
+    """
+    cat = NO_RISK_LABEL
+    for lower, label, _ in RISK_CATEGORIES_C:
+        if hi_c >= lower:
+            cat = label
+    return cat
+
+
+def _heat_streak(station_id: str) -> dict | None:
+    """Consecutive forecast days at or above today's risk category.
+
+    Starts counting from the first forecast day and continues while the
+    daytime peak Heat Index stays at or above that first day's own risk
+    category. Forward-looking only, by construction: this app has no
+    persisted history of past days, that would need a separate, larger
+    archive project, so it cannot say "day N of an M-day streak"
+    counting backward from days that already happened, only "the next
+    M days stay this bad," which is the honest version of the same
+    warning given what data actually exists right now.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+
+    Returns
+    -------
+    dict or None
+        {"category": str, "streak_days": int}, or None if the station
+        is unknown, _GFS_DS is not loaded, or today is not elevated
+        risk at all.
+    """
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None:
+        return None
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    hi_series = _GFS_DS["hi"].sel(**sel).to_series()
+    idx_local = pd.DatetimeIndex(hi_series.index)
+    if idx_local.tz is None:
+        idx_local = idx_local.tz_localize("UTC")
+    idx_local = idx_local.tz_convert(tz)
+    hi_series.index = idx_local
+
+    daily_peaks = []
+    for date_ in sorted(set(idx_local.date)):
+        day_vals = hi_series[idx_local.date == date_]
+        if day_vals.empty:
+            continue
+        daily_peaks.append((date_, float(day_vals.max())))
+    if not daily_peaks:
+        return None
+
+    today_cat = _heat_index_category(daily_peaks[0][1])
+    if today_cat == NO_RISK_LABEL:
+        return None
+    today_rank = _RISK_CATEGORY_ORDER.index(today_cat)
+
+    streak_days = 0
+    for _, peak in daily_peaks:
+        if _RISK_CATEGORY_ORDER.index(_heat_index_category(peak)) >= today_rank:
+            streak_days += 1
+        else:
+            break
+
+    return {"category": today_cat, "streak_days": streak_days}
+
+
+def _overnight_and_streak_panel(station_id: str) -> html.Div:
+    """
+    Cumulative-danger streak banner, based on consecutive days' *daytime*
+    peak Heat Index only - it says nothing about overnight lows, so the
+    copy must not imply it does. Originally paired with
+    a day-by-day chip row of each night's low, but that duplicated what
+    the chart right below it already shows visually (the nightly troughs,
+    against the same 90F reference line) - dropped to cut panel clutter;
+    the chart is where the actual per-night detail lives now. _overnight_
+    lows()/_warm_night_band() stay defined (unused here) since a lighter-
+    weight surface for that data - a tooltip, a popup - is a plausible
+    near-term addition.
+    """
+    streak = _heat_streak(station_id)
+    if streak is None or streak["streak_days"] < 2:
+        return html.Div()
+
+    return html.Div([
+        html.Span(f"{streak['streak_days']} consecutive days ", style={
+            "fontWeight": "700", "color": "#f2994a"}),
+        html.Span(f"forecast at or above {streak['category']}", style={
+            "fontWeight": "700", "color": "#f2994a"}),
+        html.Span(" - back-to-back high-risk days compound heat stress on the body; danger is cumulative.",
+                 style={"color": "#94a3b8"}),
+    ], style={"fontSize": "12px", "padding": "10px 0 4px 0",
+             "borderTop": "1px solid #334155", "marginTop": "4px"})
 
 
 # ── Dash app ──────────────────────────────────────────────────────────────────
@@ -1116,21 +2133,26 @@ app.layout = html.Div(
                     ),
                 ]),
                 html.Div([
-                    html.Label("Day", style=_LABEL_STYLE),
-                    dcc.Dropdown(
-                        id="day-dropdown", options=_DAY_OPTIONS,
-                        value=_DEFAULT_DAY_VALUE, clearable=False,
-                        style=_DROPDOWN_STYLE,
-                    ),
-                ]),
-                html.Div(id="hour-dropdown-wrap", children=[
                     html.Label("Time", style=_LABEL_STYLE),
-                    dcc.Dropdown(
-                        id="hour-dropdown", options=_INITIAL_HOUR_OPTIONS,
-                        value=_DEFAULT_HOUR_VALUE, clearable=False,
-                        style=_DROPDOWN_STYLE,
+                    html.Div(
+                        style={"display": "flex", "alignItems": "center", "gap": "12px"},
+                        children=[
+                            html.Button("▶  Play", id="play-btn", n_clicks=0, style={
+                                "backgroundColor": "#334155", "color": "#e2e8f0",
+                                "border": "1px solid #475569", "borderRadius": "6px",
+                                "padding": "6px 14px", "fontSize": "13px", "cursor": "pointer",
+                                "flexShrink": "0",
+                            }),
+                            dcc.Slider(
+                                id="time-slider",
+                                min=0, max=_TIME_SLIDER_MAX, step=1, value=_DEFAULT_TIME_IDX,
+                                marks=_TIME_SLIDER_MARKS,
+                                tooltip={"placement": "bottom", "always_visible": False},
+                                updatemode="mouseup",
+                            ),
+                        ],
                     ),
-                ]),
+                ], style={"flex": "1", "minWidth": "420px"}),
             ],
         )),
 
@@ -1151,50 +2173,28 @@ app.layout = html.Div(
             ],
         )),
 
-        # ── station panel ─────────────────────────────────────────────────────
+        # ── station headline ──────────────────────────────────────────────────
+        # "People first, scientist second": the headline number, risk
+        # category, and today's context sit right under the map, ahead of
+        # the leaderboard. Everything more technical (verification, GEV
+        # analysis, bias controls, the charts themselves) lives in its own
+        # section below the leaderboard instead, for whoever wants to dig
+        # in - see "station deep-dive" further down.
         _page_section(None, None, html.Div(
             style={"padding": "0 24px 24px 24px"},
             children=[
                 html.Div(
-                    style={"display": "flex", "alignItems": "center",
-                           "justifyContent": "space-between", "flexWrap": "wrap",
-                           "gap": "8px", "paddingTop": "8px",
-                           "borderTop": "1px solid #334155", "marginBottom": "8px"},
-                    children=[
-                        html.Div(
-                            "Click a station on the map to see GFS forecast + ASOS observations",
-                            id="station-hint",
-                            style={"fontSize": "12px", "color": "#475569"},
-                        ),
-                        html.Div(id="series-selector-wrap",
-                                 style={"display": "none", "gap": "20px", "flexWrap": "wrap"},
-                                 children=[
-                            html.Div([
-                                html.Span("Metric  ", style={"fontSize": "11px", "color": "#64748b"}),
-                                dcc.Checklist(
-                                    id="metric-selector",
-                                    options=[
-                                        {"label": " Feels Like", "value": "hi"},
-                                        {"label": " Actual Temp", "value": "t2m"},
-                                    ],
-                                    value=DEFAULT_METRICS, inline=True,
-                                    inputStyle={"marginRight": "4px"},
-                                    labelStyle={"marginRight": "14px", "fontSize": "12px",
-                                                "color": "#cbd5e1"},
-                                ),
-                            ]),
-                        ]),
-                    ],
+                    "Click a station on the map to see GFS forecast + ASOS observations",
+                    id="station-hint",
+                    style={"fontSize": "13px", "fontWeight": "600", "color": "#cbd5e1",
+                          "paddingTop": "8px", "borderTop": "1px solid #334155",
+                          "marginBottom": "8px"},
                 ),
-                html.Div([
-                    "Heat Index = how hot it feels once humidity is factored in (NWS formula). ",
-                    html.A("Learn more at weather.gov",
-                          href="https://www.weather.gov/safety/heat-index",
-                          target="_blank",
-                          style={"color": "#64748b", "textDecoration": "underline"}),
-                ], style={"fontSize": "11px", "color": "#64748b", "marginBottom": "10px",
-                         "maxWidth": "820px", "lineHeight": "1.5"}),
-                html.Div(id="station-panel"),
+                html.Div(
+                    "Heat Index = how hot it feels once humidity is factored in (NWS formula).",
+                    style={"fontSize": "12px", "color": "#94a3b8", "marginBottom": "10px",
+                          "maxWidth": "820px", "lineHeight": "1.5"}),
+                html.Div(id="station-panel-headline"),
             ],
         )),
 
@@ -1202,8 +2202,98 @@ app.layout = html.Div(
         _page_section(None, None, html.Div(
             style={"padding": "0 24px 24px 24px"},
             children=[
+                dcc.RadioItems(
+                    id="leaderboard-mode",
+                    options=[
+                        {"label": " Today's Peak",     "value": "now"},
+                        {"label": " Peak This Event",  "value": "peak"},
+                    ],
+                    value="now", inline=True,
+                    inputStyle={"marginRight": "4px"},
+                    labelStyle={"marginRight": "14px", "fontSize": "12px", "color": "#cbd5e1"},
+                    style={"marginBottom": "8px"},
+                ),
                 html.Div(id="leaderboard-panel"),
             ],
+        )),
+
+        # ── station deep-dive ─────────────────────────────────────────────────
+        # The "scientist" half of the station panel - the bias-correction
+        # controls, the actual time series charts, and the GEV analysis
+        # (an opt-in expander) last, after the charts rather than before
+        # them - GEV is a step more abstract/scientific than a time series
+        # chart, so it reads better as "one more thing to dig into" once
+        # you've already seen the concrete forecast. Bias controls sit
+        # immediately above the charts they affect (Show toggle, then
+        # window dropdown below it) rather than off on their own; both
+        # stay static, outside the dynamically-rebuilt containers, since
+        # each is simultaneously an Input and an indirect Output of
+        # update_station_panel - a component can't be both consumed and
+        # structurally recreated by the same callback.
+        _page_section(None, None, html.Div(
+            style={"padding": "0 24px 24px 24px"},
+            children=[
+                html.Div(
+                    style={"display": "flex", "flexDirection": "column", "gap": "10px",
+                           "paddingTop": "10px", "borderTop": "1px solid #334155"},
+                    children=[
+                        html.Div(id="series-selector-wrap",
+                                 style={"display": "none", "gap": "20px", "flexWrap": "wrap"},
+                                 children=[
+                            html.Div([
+                                html.Span("Show  ", style={"fontSize": "11px", "color": "#64748b"}),
+                                # Full transparency toggle: switches which
+                                # single line is plotted, never both at once
+                                # (that's the exact pattern collapsed away
+                                # earlier for being unreadable/misleading).
+                                # Default stays on the corrected view - this
+                                # is an opt-in "show me the raw model output"
+                                # control, not a return to showing both.
+                                dcc.RadioItems(
+                                    id="bias-display-mode",
+                                    options=[
+                                        {"label": " Bias-Corrected", "value": "corrected"},
+                                        {"label": " Raw Forecast",   "value": "raw"},
+                                    ],
+                                    value="corrected", inline=True,
+                                    inputStyle={"marginRight": "4px"},
+                                    labelStyle={"marginRight": "14px", "fontSize": "12px",
+                                                "color": "#cbd5e1"},
+                                ),
+                            ]),
+                        ]),
+                        html.Div(id="bias-window-wrap", style={"display": "none"},
+                                children=[
+                            html.Span(id="bias-window-label",
+                                      style={"fontSize": "11px", "color": "#94a3b8",
+                                             "display": "block", "marginBottom": "2px"}),
+                            dcc.Dropdown(
+                                id="bias-window-dropdown",
+                                options=[
+                                    {"label": "Last 3 hours",  "value": 3},
+                                    {"label": "Last 6 hours",  "value": 6},
+                                    {"label": "Last 12 hours", "value": 12},
+                                    {"label": "All of today",  "value": "all"},
+                                ],
+                                value=6, clearable=False,
+                                style={"width": "220px", "fontSize": "12px", "color": "#0f172a"},
+                            ),
+                        ]),
+                    ],
+                ),
+                html.Div(id="station-panel-charts"),
+                html.Div(id="station-panel-analysis"),
+            ],
+        )),
+
+        # ── forecast verification ────────────────────────────────────────────
+        # The deepest-in-the-weeds content (same-day N/Bias/RMSE/Brier) gets
+        # the very last content section on the page, below even the charts -
+        # audit-trail material for whoever scrolls all the way down, not
+        # something competing for attention with anything above it.
+        _page_section(None, None, html.Div(
+            style={"padding": "0 24px 24px 24px"},
+            children=[html.Div(id="station-panel-verification")],
         )),
 
         # ── footer ────────────────────────────────────────────────────────────
@@ -1221,33 +2311,14 @@ app.layout = html.Div(
         )),
 
         # ── hidden components ─────────────────────────────────────────────────
-        dcc.Store(id="selected-station"),
+        dcc.Store(id="selected-station", data="KDCA"),
         dcc.Store(id="current-time-idx"),
+        dcc.Interval(id="animation-interval", interval=800, n_intervals=0, disabled=True),
     ],
 )
 
 
 # ── callbacks ─────────────────────────────────────────────────────────────────
-
-@app.callback(
-    Output("hour-dropdown", "options"),
-    Output("hour-dropdown", "value"),
-    Input("day-dropdown", "value"),
-)
-def update_hour_options(day_first_idx):
-    if _GFS_DS is None or day_first_idx is None:
-        return [], None
-    options = _hour_options_for_day(day_first_idx)
-    return options, options[0]["value"] if options else None
-
-
-@app.callback(
-    Output("hour-dropdown-wrap", "style"),
-    Input("variable-selector", "value"),
-)
-def toggle_hour_dropdown(var_key):
-    return {"display": "none"} if var_key == "risk" else {}
-
 
 @app.callback(
     Output("series-selector-wrap", "style"),
@@ -1260,26 +2331,49 @@ def toggle_series_selector(station_id):
 
 @app.callback(
     Output("current-time-idx", "data"),
-    Input("day-dropdown", "value"),
-    Input("hour-dropdown", "value"),
-    Input("variable-selector", "value"),
+    Input("time-slider", "value"),
 )
-def update_current_time_idx(day_idx, hour_idx, var_key):
-    if var_key == "risk":
-        return day_idx if day_idx is not None else 0
-    return hour_idx if hour_idx is not None else (day_idx if day_idx is not None else 0)
+def update_current_time_idx(time_idx):
+    # Plain passthrough - kept as its own Store (rather than pointing every
+    # downstream callback at time-slider.value directly) so update_map,
+    # update_leaderboard_and_legend, and update_station_panel didn't all
+    # need to change when the Day/Time dropdowns became a single slider.
+    # For "risk" mode this is still just a timestamp index - _build_field_map
+    # already derives "which day" from whatever index it's given, so the
+    # slider needs no separate day-only mode the way the old hour-dropdown
+    # did.
+    return time_idx if time_idx is not None else 0
 
 
 @app.callback(
-    Output("field-map",        "figure"),
-    Output("time-label",       "children"),
-    Output("leaderboard-panel", "children"),
-    Output("risk-legend-panel", "children"),
-    Input("variable-selector", "value"),
-    Input("current-time-idx",  "data"),
-    Input("unit-selector",     "value"),
+    Output("animation-interval", "disabled"),
+    Output("play-btn", "children"),
+    Input("play-btn", "n_clicks"),
+    State("animation-interval", "disabled"),
+    prevent_initial_call=True,
 )
-def update_map(var_key, time_idx, unit):
+def toggle_animation(_n_clicks, currently_disabled):
+    if currently_disabled:
+        return False, "⏸  Pause"
+    return True, "▶  Play"
+
+
+@app.callback(
+    Output("time-slider", "value"),
+    Input("animation-interval", "n_intervals"),
+    State("time-slider", "value"),
+    State("time-slider", "max"),
+    prevent_initial_call=True,
+)
+def advance_frame(_n_intervals, current_value, max_value):
+    current = int(current_value or 0)
+    maximum = int(max_value or 0)
+    return (current + 1) % (maximum + 1)
+
+
+def _build_field_map(var_key, time_idx, unit, selected_station):
+    """Figure-construction logic for the map, used by update_map.
+    Returns (fig, time_label)."""
     time_idx = int(time_idx or 0)
 
     if _GFS_DS is None:
@@ -1292,25 +2386,35 @@ def update_map(var_key, time_idx, unit):
         fig.update_layout(height=MAP_HEIGHT, paper_bgcolor="#0f172a",
                           plot_bgcolor="#0f172a",
                           xaxis=dict(visible=False), yaxis=dict(visible=False))
-        return fig, "No data", html.Div(), html.Div()
+        return fig, "No data"
 
     lats = _GFS_DS.latitude.values
     lons = _GFS_DS.longitude.values
-    leaderboard = _leaderboard_table(time_idx, unit, _et_utc_label(_GFS_DS.time.values[time_idx]))
-    legend = _risk_legend()
 
     if var_key == "risk":
         local_date = _to_et(_GFS_DS.time.values[time_idx]).date()
-        idxs = _day_time_indices(local_date)
+        # Running peak through the day, not the whole day's max regardless
+        # of position - only hours up to and including the current frame
+        # count. Previously this always maxed over every hour of the day
+        # no matter where time_idx pointed, so the map looked frozen while
+        # scrubbing or playing within a single day, only changing once the
+        # slider crossed into the next calendar day. Deliberately does not
+        # drop back down overnight the way classifying the instantaneous
+        # Heat Index would: the day's peak danger stays shown as the
+        # running reference for how much heat exposure this place has
+        # already had today, since that exposure does not undo itself
+        # once the sun goes down.
+        idxs = [i for i in _day_time_indices(local_date) if i <= time_idx]
         data = _GFS_DS["hi"].isel(time=idxs).max(dim="time").values
-        day_label = _to_et(_GFS_DS.time.values[time_idx]).strftime("%A, %b %d")
-        title = f"2026 US Heat Wave  ·  Risk Level (daily max Heat Index)  |  {day_label}"
+        ts_str = _et_utc_label(_GFS_DS.time.values[time_idx])
+        title = f"2026 US Heat Wave  ·  Risk Level (today's peak so far)  |  {ts_str}"
         stn_vals = _get_station_risk_values(idxs)
         fig = _mapbox_figure(
             data=data, lats=lats, lons=lons, var_key="risk", title=title,
             station_values=stn_vals, uirevision="conus_risk", unit=unit,
+            selected_station=selected_station,
         )
-        return fig, day_label, leaderboard, legend
+        return fig, ts_str
 
     vm     = VARIABLE_META.get(var_key, VARIABLE_META["t2m"])
     da     = _GFS_DS[var_key].isel(time=time_idx)
@@ -1330,8 +2434,72 @@ def update_map(var_key, time_idx, unit):
         station_values = stn_vals,
         uirevision     = f"conus_{var_key}",
         unit           = unit,
+        selected_station = selected_station,
     )
-    return fig, ts_str, leaderboard, legend
+    return fig, ts_str
+
+
+@app.callback(
+    Output("field-map",  "figure"),
+    Output("time-label", "children"),
+    Input("variable-selector", "value"),
+    Input("current-time-idx",  "data"),
+    Input("unit-selector",     "value"),
+    Input("selected-station",  "data"),
+)
+def update_map(var_key, time_idx, unit, selected_station):
+    """
+    Single callback, single owner of field-map.figure, selected_station
+    as a normal Input - no allow_duplicate split. Two different attempts
+    at splitting the highlight into its own allow_duplicate=True callback
+    both failed in the real browser (fired once for the initial render,
+    then silently stopped updating on later clicks) despite working when
+    invoked directly via the Dash HTTP API - that dual-owner pattern is
+    unreliable here, so this reverts to the plain single-callback form.
+    """
+    return _build_field_map(var_key, time_idx, unit, selected_station)
+
+
+@app.callback(
+    Output("leaderboard-panel", "children"),
+    Output("risk-legend-panel", "children"),
+    Input("variable-selector", "value"),
+    Input("current-time-idx",  "data"),
+    Input("unit-selector",     "value"),
+    Input("leaderboard-mode",  "value"),
+)
+def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode):
+    """
+    Split off from update_map: the leaderboard's pattern-matched row IDs
+    and the legend don't depend on which station is selected, so they
+    shouldn't rebuild on every map click - only field-map.figure has a
+    single owner now (no allow_duplicate split-callback), which is the
+    more standard Dash pattern and was suspected of being why the
+    highlight ring wasn't reliably rendering in the browser despite the
+    server-side figure data being correct.
+
+    Two leaderboard modes: "now" is the original slider-position snapshot
+    (reshuffles as you scrub/play the animation); "peak" is a stable
+    ranking by each city's worst moment anywhere in the 5-day window, so
+    there's still a "who has it worst overall" read while the animation
+    is playing. "peak" doesn't depend on time_idx at all, but it's cheap
+    (in-memory xarray max, no I/O) so recomputing it on every slider tick
+    isn't worth a separate callback just to avoid.
+    """
+    if _GFS_DS is None:
+        return html.Div(), html.Div()
+    time_idx = int(time_idx or 0)
+    if leaderboard_mode == "peak":
+        leaderboard = _peak_leaderboard_table(unit)
+    else:
+        # Day-level label, not the precise instant _et_utc_label gives
+        # elsewhere - the ranking below is now a per-day peak, not tied to
+        # this exact timestamp, so labeling it down to the minute would
+        # overstate the precision of what's actually being shown.
+        day_label = _to_et(_GFS_DS.time.values[time_idx]).strftime("%A, %b %d")
+        leaderboard = _leaderboard_table(time_idx, unit, day_label)
+    legend = _risk_legend()
+    return leaderboard, legend
 
 
 @app.callback(
@@ -1366,27 +2534,42 @@ def select_station_from_leaderboard(_n_clicks):
 
 
 @app.callback(
-    Output("station-panel", "children"),
-    Output("station-hint",  "children"),
+    Output("station-panel-headline",     "children"),
+    Output("station-panel-analysis",     "children"),
+    Output("station-panel-charts",       "children"),
+    Output("station-panel-verification", "children"),
+    Output("station-hint",    "children"),
+    Output("bias-window-wrap",  "style"),
+    Output("bias-window-label", "children"),
     Input("selected-station", "data"),
     Input("current-time-idx", "data"),
     Input("unit-selector",    "value"),
-    Input("metric-selector",  "value"),
+    Input("bias-window-dropdown", "value"),
+    Input("bias-display-mode",    "value"),
 )
-def update_station_panel(station_id, time_idx, unit, metrics):
+def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_mode):
     time_idx = int(time_idx or 0)
+    hidden_window = ({"display": "none"}, "")
 
     if not station_id:
         return (
             html.Div(style={"height": "60px"}),
+            html.Div(),
+            html.Div(),
+            html.Div(),
             "Click a station on the map to see GFS forecast + ASOS observations",
+            *hidden_window,
         )
 
     stn = get_station(station_id)
     if stn is None:
         return (
             _station_placeholder(f"Station {station_id} not in catalog."),
+            html.Div(),
+            html.Div(),
+            html.Div(),
             f"Station: {station_id}",
+            *hidden_window,
         )
 
     # Fetch ASOS from IEM on first click, or once the cached copy is older
@@ -1405,16 +2588,74 @@ def update_station_panel(station_id, time_idx, unit, metrics):
             asos_df = cached[1]   # fetch failed - fall back to stale cache rather than showing nothing
         print(f"{len(asos_df)} obs")
 
-    fig   = _build_station_figure(station_id, asos_df, time_idx, unit=unit, metrics=metrics)
+    # Interactive same-day bias-correction solver: the dropdown's own
+    # options/value need no per-station clamping (unlike a slider's min/
+    # max/value, which had to be driven by explicit Outputs to avoid
+    # fighting with its own Input) - "Last 3h" means the same thing
+    # regardless of station, so it can just be read directly.
+    window_hours = None if bias_window in (None, "all") else float(bias_window)
+    show_raw = bias_display_mode == "raw"
+    all_metrics = ["hi", "t2m", "td2m"]
+    _, n_available = _build_station_figure(station_id, asos_df, time_idx, unit=unit, metrics=all_metrics)
+
+    if n_available is None or n_available <= _BIAS_MIN_PAIRS:
+        window_outputs = hidden_window
+    else:
+        trend_lines = [_bias_trend_summary(station_id, m, unit) for m in all_metrics]
+        trend_text  = "  ·  ".join(t for t in trend_lines if t)
+        label = f"Bias correction window ({n_available} same-day obs available)"
+        if trend_text:
+            label += f"  -  Today's trend: {trend_text}"
+        window_outputs = (
+            {"display": "block", "marginBottom": "10px"},
+            label,
+        )
+
+    # Two panels, not one combined chart with togglable lines: Feels Like
+    # is the headline (its own chart), Actual Temp + Dewpoint share a
+    # second chart specifically so the T-Td *spread* is readable - the
+    # closer the two lines sit to each other, the higher the relative
+    # humidity, which is a genuinely standard way meteorologists read
+    # moisture conditions off a plot without needing a separate RH number.
+    fig_feels_like, _ = _build_station_figure(
+        station_id, asos_df, time_idx, unit=unit, metrics=["hi"],
+        bias_window_hours=window_hours, show_raw=show_raw)
+    fig_temp_dewpoint, _ = _build_station_figure(
+        station_id, asos_df, time_idx, unit=unit, metrics=["t2m", "td2m"],
+        bias_window_hours=window_hours, show_raw=show_raw)
+
     hint  = (f"Station: {station_id} - {stn['name']} ({stn['state']})  "
              f"·  {len(asos_df)} recent ASOS obs  ·  Click another station to switch")
 
-    panel = html.Div([
+    verification_stats = _station_verification(station_id, asos_df)
+    verification_children = (
+        [_verification_box(station_id, unit, verification_stats)]
+        if verification_stats else []
+    )
+
+    current_temp_c = None
+    if _GFS_DS is not None:
+        _sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+        _idx = min(time_idx, len(_GFS_DS.time) - 1)
+        current_temp_c = float(_GFS_DS["t2m"].sel(**_sel).isel(time=_idx).values)
+
+    panel_headline = html.Div([
         _hero_tile(station_id, time_idx, unit, asos_df),
         _climate_context(station_id, unit),
-        dcc.Graph(figure=fig, config={"displayModeBar": False}),
+        _overnight_and_streak_panel(station_id),
     ])
-    return panel, hint
+    panel_analysis = html.Div([
+        _gev_popup(station_id, unit, current_temp_c),
+    ])
+    panel_charts = html.Div([
+        dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
+        html.Div("Temperature & Dewpoint - closer lines mean higher humidity",
+                 style={"fontSize": "11px", "color": "#64748b", "margin": "4px 0 0 4px"}),
+        dcc.Graph(figure=fig_temp_dewpoint, config={"displayModeBar": False}),
+    ])
+    panel_verification = html.Div(verification_children)
+    return (panel_headline, panel_analysis, panel_charts, panel_verification,
+            hint, *window_outputs)
 
 
 # ── entry point ───────────────────────────────────────────────────────────────

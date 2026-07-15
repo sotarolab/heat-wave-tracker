@@ -1,16 +1,32 @@
 """
 src/heat/climate.py
-=====================
-Fetch NWS Daily Climate Report (CLI) text products via IEM's AFOS archive,
-for actual-vs-normal temperature comparison at ASOS stations that have one.
+====================
+Fetch NWS Daily Climate Report (CLI) text products via IEM's AFOS
+archive, for actual-vs-normal temperature comparison at ASOS stations
+that have one.
 
-Not every station has a CLI report - it's issued per NWS office policy,
+Not every station has a CLI report, it is issued per NWS office policy,
 not for every airport. Callers should treat a None return as "not
 available for this station," not an error.
 
-CLI product ID = "CLI" + the station's ICAO code minus the leading "K"
-(e.g. KDCA -> CLIDCA). Confirmed against several major and minor CONUS
-stations before relying on it.
+Gotchas:
+
+1. CLI product ID is "CLI" plus the station's ICAO code with the
+   leading "K" removed (e.g. KDCA -> CLIDCA). Confirmed against several
+   major and minor CONUS stations before relying on it.
+2. Different NWS offices format the MAXIMUM/MINIMUM temperature row
+   slightly differently. Some omit the trailing "LAST YEAR" column
+   entirely, which silently shifts every field after it by one position
+   under naive whitespace-split parsing. Confirmed live against a real
+   report where this produced a 4-digit year in the "normal" slot
+   instead of a temperature. The record year is the one unambiguous
+   anchor in that row: it is always a 4-digit 18xx/19xx/20xx token,
+   distinct from any plausible temperature value, and "normal" is
+   always the field immediately after it. _row_values anchors on that
+   token instead of counting positions from the end. Departure is
+   computed as observed minus normal rather than parsed from the row,
+   sidestepping the same ambiguity entirely, since departure is that by
+   definition.
 """
 from __future__ import annotations
 
@@ -25,6 +41,8 @@ _YEAR_RE = re.compile(r"^(?:18|19|20)\d{2}$")
 
 
 def _to_int(tok: str) -> int | None:
+    """Parse one CLI report token to int, treating NWS's missing/trace
+    markers (M, MM, T) as None instead of raising."""
     tok = tok.upper()
     if tok in ("M", "MM", "T"):
         return None
@@ -35,21 +53,24 @@ def _to_int(tok: str) -> int | None:
 
 
 def _row_values(temp_section: str, label: str) -> dict | None:
-    """
-    Extract observed/normal from the MAXIMUM or MINIMUM row of the
-    TEMPERATURE section.
+    """Extract observed/normal from the MAXIMUM or MINIMUM row of the TEMPERATURE section.
 
-    Different NWS offices format this row slightly differently - some
-    omit the trailing "LAST YEAR" column entirely, which silently shifts
-    every field after it by one position under naive whitespace-split
-    parsing (confirmed against a real report where this produced a
-    4-digit year in the "normal" slot). The record year is the one
-    unambiguous anchor: it's always a 4-digit 18xx/19xx/20xx token,
-    distinct from any plausible temperature value, and "normal" is
-    always the field immediately after it - so anchor there instead of
-    counting positions from the end. Departure is computed as
-    observed - normal rather than parsed, sidestepping the ambiguity
-    entirely (departure is that by definition).
+    See module Gotcha 2 for why this anchors on the record-year token
+    rather than counting fields from either end of the row.
+
+    Parameters
+    ----------
+    temp_section : str
+        The TEMPERATURE (F) block of a CLI report, as extracted by
+        fetch_climate_summary.
+    label : str
+        "MAXIMUM" or "MINIMUM", matching the row's leading label.
+
+    Returns
+    -------
+    dict or None
+        None if the row is missing or cannot be parsed. Otherwise a
+        dict with observed, normal, and departure (all int, degrees F).
     """
     for line in temp_section.splitlines():
         stripped = line.strip()
@@ -72,20 +93,36 @@ def _row_values(temp_section: str, label: str) -> dict | None:
 
 
 def fetch_climate_summary(station_id: str) -> dict | None:
-    """
-    Fetch the latest CLI (Daily Climate Report) for one station.
+    """Fetch the latest CLI (Daily Climate Report) for one station.
 
-    Returns None if the station has no CLI product, the report can't be
-    parsed, or the key values are missing/flagged. Otherwise:
-        {
-            "period_label": "Yesterday" | "Today",
-            "date": "July 2 2026",
-            "high_actual_f": 102, "high_normal_f": 89, "high_departure_f": 13,
-        }
-    high_* comes from the MAXIMUM row - a heat tracker cares about how
-    unusual the day's peak heat is, not the daily average.
+    Uses the MAXIMUM row specifically, not the daily average, since a
+    heat tracker cares about how unusual the day's peak heat is.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code, e.g. "KDCA".
+
+    Returns
+    -------
+    dict or None
+        None if the station has no CLI product, the report cannot be
+        parsed, or the key values are missing or flagged. Otherwise a
+        dict with:
+
+        period_label : str
+            "Yesterday", "Today", or "Latest" if neither marker is
+            present in the report.
+        date : str or None
+            Report date, e.g. "July 2 2026".
+        high_actual_f : int
+            Today's (or yesterday's) actual high, degrees F.
+        high_normal_f : int
+            The 1991-2020 normal high for this date, degrees F.
+        high_departure_f : int
+            high_actual_f - high_normal_f.
     """
-    code = station_id[1:] if station_id.startswith("K") else station_id
+    code = station_id[1:] if station_id.startswith("K") else station_id  # see module Gotcha 1
     try:
         resp = requests.get(
             IEM_AFOS_URL,

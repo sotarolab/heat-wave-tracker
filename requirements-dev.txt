@@ -1,6 +1,8 @@
 # Test-only dependencies. Deliberately not `-r requirements.txt` -
-# tests/test_compute.py only exercises pure-numpy code, so CI doesn't need
+# tests/test_compute.py and tests/test_bias.py only exercise pure numpy/
+# pandas code (src/heat/compute.py, src/heat/bias.py), so CI doesn't need
 # to install the heavy GFS-fetching stack (cfgrib/eccodes/herbie-data) just
-# to run it.
+# to run them.
 numpy
+pandas<3.0
 pytest>=8.0
