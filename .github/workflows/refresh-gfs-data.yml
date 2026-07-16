@@ -40,6 +40,18 @@ jobs:
       - name: Fetch latest climate normals (actual vs 1991-2020 NWS normal)
         run: python scripts/fetch_climate_normals.py
 
+      # Best-effort: appends newly-available (forecast, observed) pairs to
+      # a Neon Postgres table for future historical-uncertainty work (see
+      # scripts/log_forecast_obs.py). Not required for the site itself to
+      # work, so a transient DB/network failure here shouldn't block the
+      # data commit or deploy below - continue-on-error rather than
+      # letting it take down the actually-critical steps.
+      - name: Log today's forecast/observation pairs
+        continue-on-error: true
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: python scripts/log_forecast_obs.py
+
       - name: Commit and push if data changed
         id: commit
         run: |
