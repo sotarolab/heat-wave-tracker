@@ -903,11 +903,11 @@
   "high_departure_f": 5
  },
  "KBIL": {
-  "period_label": "Yesterday",
-  "date": "July 18 2026",
-  "high_actual_f": 95,
+  "period_label": "Today",
+  "date": "July 19 2026",
+  "high_actual_f": 87,
   "high_normal_f": 89,
-  "high_departure_f": 6
+  "high_departure_f": -2
  },
  "KGTF": {
   "period_label": "Yesterday",
