@@ -1,276 +1,269 @@
 {
  "KBOS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 82,
+  "high_normal_f": 83,
+  "high_departure_f": -1
+ },
+ "KPWM": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 73,
+  "high_normal_f": 80,
+  "high_departure_f": -7
+ },
+ "KBTV": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 71,
+  "high_normal_f": 83,
+  "high_departure_f": -12
+ },
+ "KBGR": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 70,
+  "high_normal_f": 81,
+  "high_departure_f": -11
+ },
+ "KPVD": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 80,
+  "high_normal_f": 84,
+  "high_departure_f": -4
+ },
+ "KBDL": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 80,
+  "high_normal_f": 86,
+  "high_departure_f": -6
+ },
+ "KJFK": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 78,
+  "high_normal_f": 84,
+  "high_departure_f": -6
+ },
+ "KLGA": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 80,
+  "high_normal_f": 87,
+  "high_departure_f": -7
+ },
+ "KEWR": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 77,
+  "high_normal_f": 87,
+  "high_departure_f": -10
+ },
+ "KALB": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 72,
+  "high_normal_f": 84,
+  "high_departure_f": -12
+ },
+ "KBUF": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 79,
+  "high_normal_f": 81,
+  "high_departure_f": -2
+ },
+ "KSYR": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 76,
+  "high_normal_f": 82,
+  "high_departure_f": -6
+ },
+ "KROC": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 76,
+  "high_normal_f": 83,
+  "high_departure_f": -7
+ },
+ "KPHL": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
+  "high_normal_f": 88,
+  "high_departure_f": 4
+ },
+ "KPIT": {
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 85,
   "high_normal_f": 83,
   "high_departure_f": 2
  },
- "KPWM": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 80,
-  "high_normal_f": 80,
-  "high_departure_f": 0
- },
- "KBTV": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 82,
-  "high_normal_f": 83,
-  "high_departure_f": -1
- },
- "KBGR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 78,
-  "high_normal_f": 81,
-  "high_departure_f": -3
- },
- "KPVD": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 84,
-  "high_normal_f": 84,
-  "high_departure_f": 0
- },
- "KBDL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 84,
-  "high_normal_f": 86,
-  "high_departure_f": -2
- },
- "KJFK": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 86,
-  "high_normal_f": 84,
-  "high_departure_f": 2
- },
- "KLGA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
-  "high_normal_f": 87,
-  "high_departure_f": 1
- },
- "KEWR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
-  "high_normal_f": 87,
-  "high_departure_f": 1
- },
- "KALB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 83,
-  "high_normal_f": 84,
-  "high_departure_f": -1
- },
- "KBUF": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 82,
-  "high_normal_f": 81,
-  "high_departure_f": 1
- },
- "KSYR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 82,
-  "high_normal_f": 82,
-  "high_departure_f": 0
- },
- "KROC": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 82,
-  "high_normal_f": 83,
-  "high_departure_f": -1
- },
- "KPHL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
-  "high_normal_f": 88,
-  "high_departure_f": 0
- },
- "KPIT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 83,
-  "high_normal_f": 83,
-  "high_departure_f": 0
- },
  "KABE": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 82,
   "high_normal_f": 87,
-  "high_departure_f": 1
+  "high_departure_f": -5
  },
  "KAVP": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 83,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 79,
   "high_normal_f": 85,
-  "high_departure_f": -2
+  "high_departure_f": -6
  },
  "KBWI": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 87,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 89,
-  "high_departure_f": -2
+  "high_departure_f": 6
  },
  "KDCA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 90,
-  "high_departure_f": 3
+  "high_departure_f": 5
  },
  "KIAD": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
   "high_normal_f": 88,
-  "high_departure_f": 2
+  "high_departure_f": 6
  },
  "KORF": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 99,
   "high_normal_f": 90,
-  "high_departure_f": -2
+  "high_departure_f": 9
  },
  "KRIC": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 97,
   "high_normal_f": 90,
-  "high_departure_f": 2
- },
- "KCHO": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
-  "high_normal_f": 90,
-  "high_departure_f": 3
+  "high_departure_f": 7
  },
  "KCKB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 89,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 84,
   "high_normal_f": 86,
-  "high_departure_f": 3
+  "high_departure_f": -2
  },
  "KHTS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 86,
   "high_normal_f": 87,
-  "high_departure_f": 6
+  "high_departure_f": -1
  },
  "KRDU": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 97,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 91,
-  "high_departure_f": 6
+  "high_departure_f": 4
  },
  "KGSO": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 95,
   "high_normal_f": 89,
   "high_departure_f": 6
  },
  "KCLT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 98,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
   "high_normal_f": 91,
-  "high_departure_f": 7
+  "high_departure_f": 5
  },
  "KAVL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 85,
   "high_normal_f": 85,
-  "high_departure_f": 5
+  "high_departure_f": 0
  },
  "KCAE": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 99,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 97,
   "high_normal_f": 93,
-  "high_departure_f": 6
+  "high_departure_f": 4
  },
  "KCHS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 97,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 92,
-  "high_departure_f": 5
+  "high_departure_f": 3
  },
  "KSAV": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
   "high_normal_f": 93,
-  "high_departure_f": 2
+  "high_departure_f": 1
  },
  "KJAX": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 95,
   "high_normal_f": 92,
   "high_departure_f": 3
  },
  "KGNV": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 91,
-  "high_departure_f": 4
- },
- "KTLH": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
-  "high_normal_f": 92,
-  "high_departure_f": 3
- },
- "KMCO": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
-  "high_normal_f": 92,
   "high_departure_f": 1
  },
+ "KTLH": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
+  "high_normal_f": 92,
+  "high_departure_f": 0
+ },
+ "KMCO": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
+  "high_normal_f": 92,
+  "high_departure_f": 0
+ },
  "KTPA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 86,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 85,
   "high_normal_f": 91,
-  "high_departure_f": -5
+  "high_departure_f": -6
  },
  "KMIA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
   "high_normal_f": 91,
-  "high_departure_f": 3
+  "high_departure_f": 0
  },
  "KFLL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 88,
   "high_normal_f": 90,
-  "high_departure_f": 3
+  "high_departure_f": -2
  },
  "KPBI": {
   "period_label": "Yesterday",
@@ -280,179 +273,179 @@
   "high_departure_f": 4
  },
  "KDAB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 91,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
   "high_normal_f": 90,
-  "high_departure_f": 1
- },
- "KPNS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
-  "high_normal_f": 92,
   "high_departure_f": 3
  },
+ "KPNS": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 97,
+  "high_normal_f": 92,
+  "high_departure_f": 5
+ },
  "KMOB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 96,
   "high_normal_f": 91,
   "high_departure_f": 5
  },
  "KHSV": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 87,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 92,
-  "high_departure_f": -5
+  "high_departure_f": 0
  },
  "KBHM": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
   "high_normal_f": 91,
-  "high_departure_f": -3
+  "high_departure_f": 0
  },
  "KATL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 91,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
   "high_normal_f": 90,
-  "high_departure_f": 1
+  "high_departure_f": 3
  },
  "KAGS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 96,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 94,
-  "high_departure_f": 2
+  "high_departure_f": 1
  },
  "KCHA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
   "high_normal_f": 91,
-  "high_departure_f": 1
+  "high_departure_f": 2
  },
  "KBNA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 91,
-  "high_departure_f": 3
+  "high_departure_f": 4
  },
  "KTYS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 89,
   "high_normal_f": 89,
-  "high_departure_f": 3
+  "high_departure_f": 0
  },
  "KMEM": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
   "high_normal_f": 92,
-  "high_departure_f": 1
+  "high_departure_f": 2
  },
  "KJAN": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
   "high_normal_f": 92,
-  "high_departure_f": 3
+  "high_departure_f": 4
  },
  "KGPT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 97,
   "high_normal_f": 91,
   "high_departure_f": 6
  },
  "KMSY": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
-  "high_normal_f": 91,
-  "high_departure_f": 3
- },
- "KBTR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 94,
   "high_normal_f": 92,
   "high_departure_f": 2
  },
- "KLCH": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+ "KBTR": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 92,
-  "high_departure_f": 0
+  "high_departure_f": 3
+ },
+ "KLCH": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
+  "high_normal_f": 92,
+  "high_departure_f": 2
  },
  "KSHV": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
-  "high_normal_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
+  "high_normal_f": 95,
   "high_departure_f": -1
  },
  "KIAH": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 95,
   "high_normal_f": 95,
   "high_departure_f": 0
  },
  "KHOU": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 93,
   "high_normal_f": 93,
   "high_departure_f": 0
  },
  "KDFW": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 96,
-  "high_departure_f": -2
+  "high_departure_f": -1
  },
  "KSAT": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 80,
+  "high_actual_f": 95,
   "high_normal_f": 95,
-  "high_departure_f": -15
+  "high_departure_f": 0
  },
  "KAUS": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 79,
-  "high_normal_f": 96,
-  "high_departure_f": -17
- },
- "KACT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
   "high_actual_f": 95,
-  "high_normal_f": 97,
-  "high_departure_f": -2
- },
- "KCRP": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
-  "high_normal_f": 94,
+  "high_normal_f": 96,
   "high_departure_f": -1
  },
+ "KACT": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
+  "high_normal_f": 97,
+  "high_departure_f": -1
+ },
+ "KCRP": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
+  "high_normal_f": 94,
+  "high_departure_f": 0
+ },
  "KAMA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 93,
-  "high_departure_f": -3
+  "high_departure_f": -1
  },
  "KELP": {
   "period_label": "Yesterday",
@@ -462,60 +455,60 @@
   "high_departure_f": -2
  },
  "KMAF": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 87,
-  "high_normal_f": 96,
-  "high_departure_f": -9
- },
- "KSJT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 83,
-  "high_normal_f": 98,
-  "high_departure_f": -15
- },
- "KLBB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 84,
-  "high_normal_f": 94,
-  "high_departure_f": -10
- },
- "KOKC": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
-  "high_normal_f": 94,
-  "high_departure_f": -6
- },
- "KTUL": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 83,
-  "high_normal_f": 94,
-  "high_departure_f": -11
+  "high_actual_f": 94,
+  "high_normal_f": 96,
+  "high_departure_f": -2
  },
- "KLAW": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+ "KSJT": {
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 91,
   "high_normal_f": 98,
   "high_departure_f": -7
  },
- "KICT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+ "KLBB": {
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 91,
-  "high_normal_f": 93,
+  "high_normal_f": 94,
+  "high_departure_f": -3
+ },
+ "KOKC": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
+  "high_normal_f": 94,
+  "high_departure_f": -3
+ },
+ "KTUL": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
+  "high_normal_f": 94,
+  "high_departure_f": -1
+ },
+ "KLAW": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
+  "high_normal_f": 98,
   "high_departure_f": -2
  },
+ "KICT": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
+  "high_normal_f": 93,
+  "high_departure_f": 1
+ },
  "KTOP": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 91,
-  "high_departure_f": -1
+  "high_departure_f": 1
  },
  "KGLD": {
   "period_label": "Yesterday",
@@ -525,309 +518,309 @@
   "high_departure_f": -1
  },
  "KSTL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
   "high_normal_f": 90,
-  "high_departure_f": 2
+  "high_departure_f": 4
  },
  "KMCI": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 91,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 89,
-  "high_departure_f": 2
+  "high_departure_f": 3
  },
  "KSGF": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 89,
   "high_normal_f": 90,
-  "high_departure_f": -2
+  "high_departure_f": -1
  },
  "KCOU": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 89,
-  "high_departure_f": 1
+  "high_departure_f": 3
  },
  "KDSM": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
   "high_normal_f": 86,
-  "high_departure_f": 6
+  "high_departure_f": 5
  },
  "KCID": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 87,
+  "high_normal_f": 83,
+  "high_departure_f": 4
+ },
+ "KSUX": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
+  "high_normal_f": 85,
+  "high_departure_f": 5
+ },
+ "KOMA": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 98,
+  "high_normal_f": 88,
+  "high_departure_f": 10
+ },
+ "KLNK": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
+  "high_normal_f": 90,
+  "high_departure_f": 6
+ },
+ "KGRI": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 94,
+  "high_normal_f": 88,
+  "high_departure_f": 6
+ },
+ "KFAR": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
+  "high_normal_f": 82,
+  "high_departure_f": 8
+ },
+ "KBIS": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
+  "high_normal_f": 85,
+  "high_departure_f": 8
+ },
+ "KFSD": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 87,
+  "high_normal_f": 86,
+  "high_departure_f": 1
+ },
+ "KRAP": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
+  "high_normal_f": 87,
+  "high_departure_f": 9
+ },
+ "KABR": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 88,
+  "high_normal_f": 85,
+  "high_departure_f": 3
+ },
+ "KCLE": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
+  "high_normal_f": 84,
+  "high_departure_f": 9
+ },
+ "KCMH": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
+  "high_normal_f": 86,
+  "high_departure_f": 7
+ },
+ "KDAY": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 89,
+  "high_normal_f": 86,
+  "high_departure_f": 3
+ },
+ "KTOL": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
+  "high_normal_f": 87,
+  "high_departure_f": 4
+ },
+ "KGRR": {
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 90,
   "high_normal_f": 83,
   "high_departure_f": 7
  },
- "KSUX": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
-  "high_normal_f": 85,
-  "high_departure_f": 10
- },
- "KOMA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
-  "high_normal_f": 88,
-  "high_departure_f": 7
- },
- "KLNK": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
-  "high_normal_f": 90,
-  "high_departure_f": 2
- },
- "KGRI": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
-  "high_normal_f": 88,
-  "high_departure_f": 5
- },
- "KFAR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 84,
-  "high_normal_f": 82,
-  "high_departure_f": 2
- },
- "KBIS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 85,
-  "high_normal_f": 85,
-  "high_departure_f": 0
- },
- "KFSD": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
-  "high_normal_f": 86,
-  "high_departure_f": 9
- },
- "KRAP": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
-  "high_normal_f": 87,
-  "high_departure_f": 7
- },
- "KABR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 87,
-  "high_normal_f": 85,
-  "high_departure_f": 2
- },
- "KCLE": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 86,
-  "high_normal_f": 84,
-  "high_departure_f": 2
- },
- "KCMH": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
-  "high_normal_f": 86,
+ "KLAN": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
+  "high_normal_f": 83,
   "high_departure_f": 8
  },
- "KDAY": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
-  "high_normal_f": 86,
-  "high_departure_f": 6
- },
- "KTOL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
-  "high_normal_f": 87,
-  "high_departure_f": 1
- },
- "KGRR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 89,
-  "high_normal_f": 83,
-  "high_departure_f": 6
- },
- "KLAN": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
-  "high_normal_f": 83,
-  "high_departure_f": 5
- },
  "KFNT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
   "high_normal_f": 82,
-  "high_departure_f": 6
+  "high_departure_f": 8
  },
  "KIND": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 93,
   "high_normal_f": 85,
   "high_departure_f": 8
  },
  "KFWA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 89,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
   "high_normal_f": 84,
-  "high_departure_f": 5
+  "high_departure_f": 7
  },
  "KEVV": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 93,
+  "high_normal_f": 89,
+  "high_departure_f": 4
+ },
+ "KORD": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 91,
+  "high_normal_f": 85,
+  "high_departure_f": 6
+ },
+ "KMDW": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
+  "high_normal_f": 85,
+  "high_departure_f": 5
+ },
+ "KSPI": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
+  "high_normal_f": 87,
+  "high_departure_f": 3
+ },
+ "KMKE": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 89,
+  "high_normal_f": 82,
+  "high_departure_f": 7
+ },
+ "KMSN": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 86,
+  "high_normal_f": 82,
+  "high_departure_f": 4
+ },
+ "KGRB": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 82,
+  "high_normal_f": 81,
+  "high_departure_f": 1
+ },
+ "KDLH": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 80,
+  "high_normal_f": 78,
+  "high_departure_f": 2
+ },
+ "KMSP": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
+  "high_normal_f": 84,
+  "high_departure_f": 6
+ },
+ "KRST": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 85,
+  "high_normal_f": 80,
+  "high_departure_f": 5
+ },
+ "KSDF": {
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 92,
   "high_normal_f": 89,
   "high_departure_f": 3
  },
- "KORD": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
-  "high_normal_f": 85,
-  "high_departure_f": 7
- },
- "KMDW": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
-  "high_normal_f": 85,
-  "high_departure_f": 9
- },
- "KSPI": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 89,
-  "high_normal_f": 87,
-  "high_departure_f": 2
- },
- "KMKE": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
-  "high_normal_f": 82,
-  "high_departure_f": 11
- },
- "KMSN": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
-  "high_normal_f": 82,
-  "high_departure_f": 8
- },
- "KGRB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 89,
-  "high_normal_f": 81,
-  "high_departure_f": 8
- },
- "KDLH": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
-  "high_normal_f": 78,
-  "high_departure_f": 12
- },
- "KMSP": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
-  "high_normal_f": 84,
-  "high_departure_f": 11
- },
- "KRST": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
-  "high_normal_f": 81,
-  "high_departure_f": 9
- },
- "KSDF": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 91,
-  "high_normal_f": 89,
-  "high_departure_f": 2
- },
  "KLEX": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 90,
   "high_normal_f": 87,
   "high_departure_f": 3
  },
  "KBWG": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 91,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 90,
-  "high_departure_f": 1
+  "high_departure_f": 2
  },
  "KLIT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
   "high_normal_f": 92,
-  "high_departure_f": 2
+  "high_departure_f": 4
  },
  "KFSM": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 85,
+  "high_actual_f": 95,
   "high_normal_f": 94,
-  "high_departure_f": -9
+  "high_departure_f": 1
  },
  "KTXK": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 97,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 99,
   "high_normal_f": 93,
-  "high_departure_f": 4
+  "high_departure_f": 6
  },
  "KDEN": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 69,
+  "high_actual_f": 94,
   "high_normal_f": 91,
-  "high_departure_f": -22
+  "high_departure_f": 3
  },
  "KCOS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 87,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 88,
   "high_normal_f": 87,
-  "high_departure_f": 0
+  "high_departure_f": 1
  },
  "KPUB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 94,
-  "high_departure_f": 0
+  "high_departure_f": 1
  },
  "KGJT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 96,
   "high_normal_f": 95,
   "high_departure_f": 1
@@ -839,103 +832,117 @@
   "high_normal_f": 91,
   "high_departure_f": 0
  },
+ "KTUS": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
+  "high_normal_f": 100,
+  "high_departure_f": -8
+ },
  "KPHX": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 95,
   "high_normal_f": 107,
-  "high_departure_f": -14
+  "high_departure_f": -12
  },
  "KFLG": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 70,
   "high_normal_f": 82,
   "high_departure_f": -12
  },
  "KSLC": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
   "high_normal_f": 95,
-  "high_departure_f": -1
+  "high_departure_f": 1
  },
  "KLAS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 97,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 106,
   "high_normal_f": 105,
-  "high_departure_f": -8
+  "high_departure_f": 1
  },
  "KRNO": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 95,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
   "high_normal_f": 95,
-  "high_departure_f": 0
+  "high_departure_f": 1
  },
  "KBOI": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 82,
+  "high_actual_f": 99,
   "high_normal_f": 94,
-  "high_departure_f": -12
+  "high_departure_f": 5
  },
  "KTWF": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 78,
+  "high_actual_f": 95,
   "high_normal_f": 90,
-  "high_departure_f": -12
+  "high_departure_f": 5
  },
  "KLWS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 94,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 92,
-  "high_departure_f": 2
+  "high_departure_f": 0
  },
  "KBZN": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
   "high_normal_f": 87,
-  "high_departure_f": 5
+  "high_departure_f": 3
  },
  "KBIL": {
   "period_label": "Today",
   "date": "July 18 2026",
-  "high_actual_f": 81,
+  "high_actual_f": 95,
   "high_normal_f": 89,
-  "high_departure_f": -8
+  "high_departure_f": 6
  },
  "KGTF": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 93,
-  "high_normal_f": 85,
-  "high_departure_f": 8
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
+  "high_normal_f": 86,
+  "high_departure_f": 6
+ },
+ "KMSO": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
+  "high_normal_f": 87,
+  "high_departure_f": 5
  },
  "KHLN": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 91,
-  "high_normal_f": 87,
-  "high_departure_f": 4
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 89,
+  "high_normal_f": 88,
+  "high_departure_f": 1
  },
  "KCYS": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
+  "period_label": "Today",
+  "date": "July 18 2026",
   "high_actual_f": 89,
   "high_normal_f": 85,
   "high_departure_f": 4
  },
  "KSEA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 72,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 75,
   "high_normal_f": 78,
-  "high_departure_f": -6
+  "high_departure_f": -3
  },
  "KBLI": {
   "period_label": "Yesterday",
@@ -945,129 +952,129 @@
   "high_departure_f": -11
  },
  "KOLM": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 71,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 73,
   "high_normal_f": 78,
-  "high_departure_f": -7
+  "high_departure_f": -5
  },
  "KGEG": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 89,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 86,
   "high_normal_f": 86,
-  "high_departure_f": 3
+  "high_departure_f": 0
  },
  "KYKM": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 92,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 90,
   "high_normal_f": 91,
-  "high_departure_f": 1
+  "high_departure_f": -1
  },
  "KPDX": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 76,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 78,
   "high_normal_f": 83,
-  "high_departure_f": -7
+  "high_departure_f": -5
  },
  "KEUG": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 82,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 85,
   "high_normal_f": 85,
-  "high_departure_f": -3
+  "high_departure_f": 0
  },
  "KMFR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 96,
   "high_normal_f": 93,
-  "high_departure_f": -3
- },
- "KRDM": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 90,
-  "high_normal_f": 89,
-  "high_departure_f": 1
- },
- "KSFO": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 68,
-  "high_normal_f": 73,
-  "high_departure_f": -5
- },
- "KOAK": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 68,
-  "high_normal_f": 72,
-  "high_departure_f": -4
- },
- "KSJC": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 76,
-  "high_normal_f": 81,
-  "high_departure_f": -5
- },
- "KFAT": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 101,
-  "high_normal_f": 98,
   "high_departure_f": 3
  },
+ "KRDM": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 89,
+  "high_normal_f": 89,
+  "high_departure_f": 0
+ },
+ "KSFO": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 72,
+  "high_normal_f": 73,
+  "high_departure_f": -1
+ },
+ "KOAK": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 70,
+  "high_normal_f": 71,
+  "high_departure_f": -1
+ },
+ "KSJC": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 79,
+  "high_normal_f": 81,
+  "high_departure_f": -2
+ },
+ "KFAT": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 98,
+  "high_normal_f": 98,
+  "high_departure_f": 0
+ },
  "KBFL": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 101,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 99,
   "high_normal_f": 99,
-  "high_departure_f": 2
+  "high_departure_f": 0
  },
  "KLAX": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 86,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 78,
   "high_normal_f": 75,
-  "high_departure_f": 11
+  "high_departure_f": 3
  },
  "KBUR": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 88,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 92,
   "high_normal_f": 87,
-  "high_departure_f": 1
+  "high_departure_f": 5
  },
  "KLGB": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 79,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 85,
   "high_normal_f": 82,
-  "high_departure_f": -3
+  "high_departure_f": 3
  },
  "KSNA": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 81,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 80,
   "high_normal_f": 79,
-  "high_departure_f": 2
- },
- "KSAN": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 77,
-  "high_normal_f": 76,
   "high_departure_f": 1
  },
+ "KSAN": {
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 78,
+  "high_normal_f": 76,
+  "high_departure_f": 2
+ },
  "KPSP": {
-  "period_label": "Yesterday",
-  "date": "July 17 2026",
-  "high_actual_f": 107,
+  "period_label": "Today",
+  "date": "July 18 2026",
+  "high_actual_f": 112,
   "high_normal_f": 109,
-  "high_departure_f": -2
+  "high_departure_f": 3
  }
 }
