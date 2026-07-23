@@ -875,18 +875,18 @@
   "high_departure_f": 1
  },
  "KBOI": {
-  "period_label": "Yesterday",
-  "date": "July 22 2026",
-  "high_actual_f": 91,
+  "period_label": "Today",
+  "date": "July 23 2026",
+  "high_actual_f": 85,
   "high_normal_f": 95,
-  "high_departure_f": -4
+  "high_departure_f": -10
  },
  "KTWF": {
-  "period_label": "Yesterday",
-  "date": "July 22 2026",
-  "high_actual_f": 87,
+  "period_label": "Today",
+  "date": "July 23 2026",
+  "high_actual_f": 83,
   "high_normal_f": 90,
-  "high_departure_f": -3
+  "high_departure_f": -7
  },
  "KLWS": {
   "period_label": "Yesterday",
@@ -903,11 +903,11 @@
   "high_departure_f": 0
  },
  "KBIL": {
-  "period_label": "Yesterday",
-  "date": "July 22 2026",
-  "high_actual_f": 86,
+  "period_label": "Today",
+  "date": "July 23 2026",
+  "high_actual_f": 78,
   "high_normal_f": 89,
-  "high_departure_f": -3
+  "high_departure_f": -11
  },
  "KGTF": {
   "period_label": "Yesterday",
