@@ -483,11 +483,11 @@
   "high_departure_f": 10
  },
  "KTUL": {
-  "period_label": "Yesterday",
-  "date": "August 23 2026",
-  "high_actual_f": 96,
+  "period_label": "Today",
+  "date": "August 24 2026",
+  "high_actual_f": 82,
   "high_normal_f": 92,
-  "high_departure_f": 4
+  "high_departure_f": -10
  },
  "KLAW": {
   "period_label": "Yesterday",
@@ -777,11 +777,11 @@
   "high_departure_f": 5
  },
  "KFSM": {
-  "period_label": "Yesterday",
-  "date": "August 23 2026",
-  "high_actual_f": 99,
+  "period_label": "Today",
+  "date": "August 24 2026",
+  "high_actual_f": 83,
   "high_normal_f": 93,
-  "high_departure_f": 6
+  "high_departure_f": -10
  },
  "KTXK": {
   "period_label": "Yesterday",
@@ -825,13 +825,6 @@
   "high_normal_f": 88,
   "high_departure_f": 7
  },
- "KTUS": {
-  "period_label": "Yesterday",
-  "date": "August 23 2026",
-  "high_actual_f": 105,
-  "high_normal_f": 99,
-  "high_departure_f": 6
- },
  "KPHX": {
   "period_label": "Yesterday",
   "date": "August 23 2026",
@@ -868,18 +861,18 @@
   "high_departure_f": 4
  },
  "KBOI": {
-  "period_label": "Yesterday",
-  "date": "August 23 2026",
-  "high_actual_f": 90,
-  "high_normal_f": 89,
-  "high_departure_f": 1
+  "period_label": "Today",
+  "date": "August 24 2026",
+  "high_actual_f": 70,
+  "high_normal_f": 88,
+  "high_departure_f": -18
  },
  "KTWF": {
-  "period_label": "Yesterday",
-  "date": "August 23 2026",
-  "high_actual_f": 88,
+  "period_label": "Today",
+  "date": "August 24 2026",
+  "high_actual_f": 77,
   "high_normal_f": 85,
-  "high_departure_f": 3
+  "high_departure_f": -8
  },
  "KLWS": {
   "period_label": "Yesterday",
@@ -896,11 +889,11 @@
   "high_departure_f": 4
  },
  "KBIL": {
-  "period_label": "Yesterday",
-  "date": "August 23 2026",
-  "high_actual_f": 95,
+  "period_label": "Today",
+  "date": "August 24 2026",
+  "high_actual_f": 79,
   "high_normal_f": 84,
-  "high_departure_f": 11
+  "high_departure_f": -5
  },
  "KGTF": {
   "period_label": "Yesterday",
@@ -908,13 +901,6 @@
   "high_actual_f": 91,
   "high_normal_f": 81,
   "high_departure_f": 10
- },
- "KMSO": {
-  "period_label": "Yesterday",
-  "date": "August 23 2026",
-  "high_actual_f": 86,
-  "high_normal_f": 82,
-  "high_departure_f": 4
  },
  "KHLN": {
   "period_label": "Yesterday",
