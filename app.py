@@ -1815,8 +1815,57 @@ def _climate_context(station_id: str, unit: str) -> html.Div:
     )
 
 
+def _selected_day_max_c(station_id: str, time_idx: int) -> tuple[float, object] | None:
+    """Highest forecast 2m temperature on the selected step's local day.
+
+    The GEV panel compares against a distribution of annual maxima of
+    *daily max* temperature, so the value it evaluates has to be a daily
+    max too. Feeding it the temperature at the selected instant instead
+    compares an evening reading against a distribution of yearly peaks,
+    which lands at the bottom of that distribution no matter how hot the
+    day actually gets: every evening step in a 5-day CONUS forecast
+    returns a return period of exactly 1.00 years, so the panel could
+    only ever say "ordinary" unless the user happened to land on the
+    afternoon peak of the hottest day.
+
+    The day is the station's own local day, not Eastern, matching the
+    rest of the station panel (see Gotcha 1) - "the day this forecast
+    step falls on" only means anything in the station's own clock.
+
+    Parameters
+    ----------
+    station_id : str
+        4-letter ICAO station code.
+    time_idx : int
+        Index into _GFS_DS's time dimension. Clamped to the last valid
+        index if out of range, same as the rest of the panel.
+
+    Returns
+    -------
+    tuple of (float, datetime.date), or None
+        Daily maximum in degrees C, and the station-local date it falls
+        on. None if the station is unknown or _GFS_DS is not loaded.
+    """
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None:
+        return None
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    series = _GFS_DS["t2m"].sel(**sel).to_series()
+    idx_local = pd.DatetimeIndex(series.index)
+    if idx_local.tz is None:
+        idx_local = idx_local.tz_localize("UTC")
+    idx_local = idx_local.tz_convert(tz)
+
+    day = idx_local[min(time_idx, len(idx_local) - 1)].date()
+    day_vals = series[idx_local.date == day]
+    if day_vals.empty:
+        return None
+    return float(day_vals.max()), day
+
+
 def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
-                             current_temp_c: float | None, unit: str) -> go.Figure:
+                             day_max_c: float | None, unit: str) -> go.Figure:
     """The classic EVT "return level plot" for one station's GEV fit.
 
     Temperature (return level) on the y-axis against return period on
@@ -1839,10 +1888,12 @@ def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
     annual_maxima_f : np.ndarray or None
         Raw annual maxima, degrees F, for the empirical overlay points.
         None or empty skips that trace.
-    current_temp_c : float or None
-        Currently-viewed forecast temperature, degrees C, marked with a
+    day_max_c : float or None
+        Selected day's forecast maximum, degrees C, marked with a
         vertical line if its return period falls within the plotted
-        range.
+        range. A daily max, not the value at the selected instant, to
+        match the annual-max-of-daily-max scale this fit is on (see
+        _selected_day_max_c).
     unit : str
         "F" or "C" for axis display.
 
@@ -1860,10 +1911,12 @@ def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
     levels_disp = _convert_array((levels_f - 32.0) * 5.0 / 9.0, unit)
 
     fig = go.Figure()
+    x_max = float(periods.max()) if len(periods) else 100.0
 
     if annual_maxima_f is not None and len(annual_maxima_f) > 0:
         emp_values_f, emp_probs = plotting_positions(annual_maxima_f)
         emp_periods = 1.0 / emp_probs
+        x_max = max(x_max, float(emp_periods.max()))
         emp_disp = _convert_array((emp_values_f - 32.0) * 5.0 / 9.0, unit)
         fig.add_trace(go.Scatter(
             x=emp_periods, y=emp_disp, mode="markers",
@@ -1879,9 +1932,9 @@ def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
         hovertemplate=f"~1-in-%{{x:.0f}}-yr  ·  %{{y:.0f}}{unit_label}<extra></extra>",
     ))
 
-    if current_temp_c is not None:
-        current_f = current_temp_c * 9.0 / 5.0 + 32.0
-        current_period = return_period(fit, current_f)
+    if day_max_c is not None:
+        day_max_f = day_max_c * 9.0 / 5.0 + 32.0
+        current_period = return_period(fit, day_max_f)
         if current_period is not None and periods.min() <= current_period <= periods.max():
             fig.add_shape(type="line", x0=current_period, x1=current_period,
                          y0=0, y1=1, yref="paper",
@@ -1889,8 +1942,14 @@ def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
 
     fig.update_layout(
         paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG,
+        # Explicit left edge at 1 year. Autoscaling a log axis pads below the
+        # smallest plotted point, which drew ticks at 0.8/0.9 years - return
+        # periods under a year are meaningless on an annual-maximum scale
+        # (the rarest an annual max can be is "happens every year"). Range is
+        # in log10 units because the axis is type="log".
         xaxis=dict(title=dict(text="Return period (years)", font=dict(size=10)),
-                  type="log", gridcolor=_PANEL_GRID, color=_PANEL_FONT, tickfont=dict(size=9)),
+                  type="log", range=[0.0, float(np.log10(x_max))],
+                  gridcolor=_PANEL_GRID, color=_PANEL_FONT, tickfont=dict(size=9)),
         yaxis=dict(title=dict(text=f"Annual max temperature ({unit_label})", font=dict(size=10)),
                   gridcolor=_PANEL_GRID, color=_PANEL_FONT, tickfont=dict(size=9)),
         legend=dict(orientation="h", font=dict(size=9, color=_PANEL_FONT),
@@ -1901,8 +1960,8 @@ def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
     return fig
 
 
-def _gev_popup(station_id: str, unit: str, current_temp_c: float | None) -> html.Details:
-    """How rare the currently-viewed forecast temperature is, historically.
+def _gev_popup(station_id: str, unit: str, time_idx: int) -> html.Details:
+    """How rare the selected day's forecast high is, historically.
 
     Collapsed by default, a real expander, not shown up front. Reads
     the station's stationary GEV fit against its historical annual
@@ -1919,9 +1978,11 @@ def _gev_popup(station_id: str, unit: str, current_temp_c: float | None) -> html
         4-letter ICAO station code.
     unit : str
         "F" or "C".
-    current_temp_c : float or None
-        Currently-viewed forecast temperature, degrees C, used for the
-        "roughly a 1-in-N-year event" callout sentence.
+    time_idx : int
+        Index into _GFS_DS's time dimension. Only the station-local day
+        it falls on matters here, not the hour: the callout is about the
+        day's forecast high, not the selected instant (see
+        _selected_day_max_c for why that distinction is the whole point).
 
     Returns
     -------
@@ -1937,23 +1998,33 @@ def _gev_popup(station_id: str, unit: str, current_temp_c: float | None) -> html
     unit_label = _unit_label(unit)
     num_fmt = (lambda v: f"{v:.0f}") if unit == "F" else (lambda v: f"{v:.1f}")
 
+    day_max = _selected_day_max_c(station_id, time_idx)
+    day_max_c = day_max[0] if day_max else None
+
     children = []
-    if current_temp_c is not None:
-        current_f = current_temp_c * 9.0 / 5.0 + 32.0
-        period = return_period(fit, current_f)
+    if day_max is not None:
+        day_max_c, day = day_max
+        day_max_f = day_max_c * 9.0 / 5.0 + 32.0
+        period = return_period(fit, day_max_f)
         if period is not None:
-            rarity = "an ordinary summer day here" if period < 1.5 \
-                else f"roughly a 1-in-{period:.0f}-year event"
-            current_disp = _convert(current_temp_c, unit)
+            # "Ordinary" is measured against yearly peaks, not against a
+            # typical day: an annual-max scale bottoms out at 1 year, so
+            # anything under this threshold means "this would be an
+            # unremarkable year's hottest day," which is a much higher bar
+            # than "unremarkable day." Worded to say so rather than
+            # letting a hot day read as merely ordinary.
+            rarity = ("not unusual as a yearly peak here" if period < 1.5
+                      else f"roughly a 1-in-{period:.0f}-year daily high")
+            day_disp = _convert(day_max_c, unit)
             children.append(html.Div(
-                f"The forecast you're viewing ({num_fmt(current_disp)}{unit_label}) is "
-                f"{rarity} at this station, historically.",
+                f"{day.strftime('%a %b %-d')}'s forecast high "
+                f"({num_fmt(day_disp)}{unit_label}) is {rarity}, historically.",
                 style={"fontSize": "12px", "color": "#f8fafc", "fontWeight": "600",
                       "marginBottom": "4px"},
             ))
 
     fig = _gev_distribution_figure(fit, _GEV_ANNUAL_MAXIMA.get(station_id),
-                                   current_temp_c, unit)
+                                   day_max_c, unit)
     children.append(dcc.Graph(figure=fig, config={"displayModeBar": False}))
     children.append(html.Div(
         f"Stationary GEV fit to {fit['n_years']} years of annual max temperature "
@@ -2838,19 +2909,13 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
         if verification_stats else []
     )
 
-    current_temp_c = None
-    if _GFS_DS is not None:
-        _sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
-        _idx = min(time_idx, len(_GFS_DS.time) - 1)
-        current_temp_c = float(_GFS_DS["t2m"].sel(**_sel).isel(time=_idx).values)
-
     panel_headline = html.Div([
         _hero_tile(station_id, time_idx, unit, asos_df),
         _climate_context(station_id, unit),
         _overnight_and_streak_panel(station_id),
     ])
     panel_analysis = html.Div([
-        _gev_popup(station_id, unit, current_temp_c),
+        _gev_popup(station_id, unit, time_idx),
     ])
     panel_charts = html.Div([
         dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
