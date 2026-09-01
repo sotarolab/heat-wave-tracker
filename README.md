@@ -48,6 +48,7 @@ you want to regenerate it.
 - **Observations**: [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/) ASOS network, current and historical
 - **Climate normals**: NWS Daily Climate Report (1991-2020 normals)
 - **Risk categories**: official NWS heat-index thresholds
+- **Basemap**: Esri World Light Gray Canvas (Esri, HERE, Garmin, © OpenStreetMap contributors)
 
 ## License
 

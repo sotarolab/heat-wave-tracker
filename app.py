@@ -98,6 +98,38 @@ MAP_HEIGHT     = 620
 MOBILE_WIDTH_BREAKPOINT = 600 - 48
 MOBILE_MAP_HEIGHT = 380
 
+# Basemap tiles. Plotly's built-in "carto-positron" style is not usable
+# anymore: CARTO now gates basemaps.cartocdn.com behind an API key and
+# serves anonymous requests as tiles stamped "API KEY REQUIRED" across
+# every one. Nothing in this app changed - the map just started rendering
+# with that watermark tiled over the whole country. Both the vector style
+# every plotly "carto-*" style points at and the legacy raster endpoints
+# are watermarked, so no other carto-* style is a way out either.
+#
+# Esri's World Light Gray Canvas is the replacement: keyless, and the
+# closest visual match to Positron (near-white land, faint gray
+# boundaries) so the warm/cool GFS raster on top still reads the same.
+# It splits base and labels into two services, which is actually an
+# improvement here - the labels go *above* the 0.72-opacity GFS raster
+# instead of being washed out underneath it, as they were with Positron.
+# Attribution is required by Esri's terms, hence _BASEMAP_ATTRIBUTION
+# below (rendered in the page footer).
+_ESRI_CANVAS = ("https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/"
+                "World_Light_Gray_{service}/MapServer/tile/{{z}}/{{y}}/{{x}}")
+
+# Note {z}/{y}/{x}, not {z}/{x}/{y}: Esri's MapServer tile REST route puts
+# row (y) before column (x), the reverse of the XYZ convention CARTO/OSM use.
+# Swapping them silently returns valid-looking tiles of the wrong place.
+BASEMAP_BASE_LAYER = dict(
+    sourcetype="raster", source=[_ESRI_CANVAS.format(service="Base")],
+    below="traces", opacity=1.0,
+)
+BASEMAP_LABEL_LAYER = dict(
+    sourcetype="raster", source=[_ESRI_CANVAS.format(service="Reference")],
+    below="traces", opacity=1.0,
+)
+_BASEMAP_ATTRIBUTION = "Basemap: Esri, HERE, Garmin, © OpenStreetMap contributors"
+
 # Reference timezone for map-level labels (a single CONUS raster snapshot spans
 # 4 zones at once, so there's no true "local" time for it - Eastern is used as
 # the display convention, with UTC alongside for anyone who needs it).
@@ -723,10 +755,14 @@ def _mapbox_figure(
         title=dict(text=title, font=dict(size=13, color="#e2e8f0"),
                    x=0.01, xanchor="left"),
         mapbox=dict(
-            style="carto-positron",
+            # "white-bg" plus explicit raster layers rather than a built-in
+            # style - see BASEMAP_BASE_LAYER above for why carto-positron
+            # had to go. Layer order is draw order: land underneath, the
+            # GFS field over it, place labels on top of both.
+            style="white-bg",
             center=center,
             zoom=zoom,
-            layers=[image_layer],
+            layers=[BASEMAP_BASE_LAYER, image_layer, BASEMAP_LABEL_LAYER],
             # Caps manual pan/zoom-out to a modest margin around CONUS.
             # Without any bounds the map has no minimum zoom, so zooming
             # out wraps the world tiles and shows the CONUS raster
@@ -2405,6 +2441,10 @@ app.layout = html.Div(
                 html.Div(
                     "Forecast: NOAA GFS  ·  Observations: NOAA/Iowa Environmental Mesonet ASOS  ·  "
                     "Risk categories: National Weather Service",
+                    style={"marginTop": "4px", "color": "#374151"},
+                ),
+                html.Div(
+                    _BASEMAP_ATTRIBUTION,
                     style={"marginTop": "4px", "color": "#374151"},
                 ),
             ],
