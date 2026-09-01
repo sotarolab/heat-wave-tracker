@@ -11,3 +11,7 @@ build/
 
 # Herbie cache
 ~/data/
+
+# DA cycle artifacts (backgrounds, obs snapshots) - regenerated per cycle,
+# retention strategy decided in issue #8
+data/da/
