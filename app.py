@@ -2007,6 +2007,16 @@ def _gev_popup(station_id: str, unit: str, time_idx: int) -> html.Details:
         day_max_f = day_max_c * 9.0 / 5.0 + 32.0
         period = return_period(fit, day_max_f)
         if period is not None:
+            # "High temperature", not just "high": the hero tile directly
+            # above this shows Heat Index ("Feels like"), which runs a few
+            # degrees warmer on a humid day - 97F air temperature against a
+            # 99F heat index at KDCA. Both are right, but with neither
+            # labelled the two numbers read as one quantity disagreeing with
+            # itself. The GEV has to be on air temperature regardless: the
+            # archive it compares against is annual maxima of daily max
+            # temperature, so scoring a heat index on it would be the same
+            # scale mismatch this function exists to fix.
+            #
             # "Ordinary" is measured against yearly peaks, not against a
             # typical day: an annual-max scale bottoms out at 1 year, so
             # anything under this threshold means "this would be an
@@ -2017,7 +2027,7 @@ def _gev_popup(station_id: str, unit: str, time_idx: int) -> html.Details:
                       else f"roughly a 1-in-{period:.0f}-year daily high")
             day_disp = _convert(day_max_c, unit)
             children.append(html.Div(
-                f"{day.strftime('%a %b %-d')}'s forecast high "
+                f"{day.strftime('%a %b %-d')}'s forecast high temperature "
                 f"({num_fmt(day_disp)}{unit_label}) is {rarity}, historically.",
                 style={"fontSize": "12px", "color": "#f8fafc", "fontWeight": "600",
                       "marginBottom": "4px"},
