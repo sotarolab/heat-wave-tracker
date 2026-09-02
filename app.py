@@ -59,6 +59,7 @@ Gotchas:
 import base64
 import io
 import math
+import os
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -1864,6 +1865,107 @@ def _selected_day_max_c(station_id: str, time_idx: int) -> tuple[float, object] 
     return float(day_vals.max()), day
 
 
+def _ml_verification_stats(days: int = 14) -> dict | None:
+    """Network-wide live verification of the learned correction (issue #16).
+
+    Joins ml_corrections (written by scripts/log_corrections.py each
+    refresh cycle) against observations as they arrive in
+    forecast_obs_pairs, and scores raw forecast, trailing per-station
+    offset baseline, and the model on identical rows. Every scored row
+    postdates the model's training data by construction, so this is an
+    out-of-sample record that grows every cycle.
+
+    Returns None when the database is unreachable or no rows have been
+    scored yet; the panel then renders nothing rather than an error.
+    """
+    db_url = os.environ.get("NEON_DATABASE_URL")
+    if not db_url:
+        return None
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url, connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""
+                    SELECT c.model_version,
+                           COUNT(*),
+                           MIN(c.forecast_valid_time), MAX(c.forecast_valid_time),
+                           SQRT(AVG(POWER(c.raw_value_c       - p.observed_value_c, 2))),
+                           SQRT(AVG(POWER(c.offset_baseline_c - p.observed_value_c, 2))),
+                           SQRT(AVG(POWER(c.corrected_value_c - p.observed_value_c, 2)))
+                    FROM ml_corrections c
+                    JOIN forecast_obs_pairs p
+                      ON p.station_id = c.station_id
+                     AND p.metric = 't2m'
+                     AND p.forecast_valid_time = c.forecast_valid_time
+                    WHERE c.forecast_valid_time >= NOW() - INTERVAL '1 day' * %s
+                      AND c.offset_baseline_c IS NOT NULL
+                    GROUP BY c.model_version
+                    ORDER BY c.model_version DESC LIMIT 1""", (days,))
+                row = cur.fetchone()
+        finally:
+            conn.close()
+        if row is None or row[1] == 0:
+            return None
+        version, n, t0, t1, rmse_raw, rmse_off, rmse_ml = row
+        return {"version": version, "n": int(n), "start": t0, "end": t1,
+                "rmse_raw": float(rmse_raw), "rmse_offset": float(rmse_off),
+                "rmse_ml": float(rmse_ml)}
+    except Exception as exc:
+        print(f"[app] ML verification unavailable ({exc})")
+        return None
+
+
+# Fetched once at startup, same lifecycle as the data file: the app
+# restarts on every 6-hourly deploy, so this stays one cycle fresh.
+_ML_VERIF = _ml_verification_stats()
+
+
+def _ml_verification_panel(unit: str) -> html.Details:
+    """Collapsible network-wide scorecard for the learned correction.
+
+    Shows RMSE of the raw forecast, a trailing per-station offset
+    baseline, and the model, all scored on the same observed rows over
+    the trailing window. Invisible when no scored rows exist."""
+    v = _ML_VERIF
+    if v is None:
+        return html.Details(style={"display": "none"})
+    conv = (lambda x: x * 9.0 / 5.0) if unit == "F" else (lambda x: x)
+    unit_label = _unit_label(unit)
+    rows = [("Raw GFS forecast", v["rmse_raw"]),
+            ("Per-station offset (trailing 21 days)", v["rmse_offset"]),
+            ("Learned correction (model " + v["version"] + ")", v["rmse_ml"])]
+    best = min(r[1] for r in rows)
+    body = [html.Div(
+        f"Every 6 hours the learned correction is applied to the fresh "
+        f"forecast (leads up to 8 h) and logged before the outcome is known. "
+        f"As observations arrive, all three columns are scored on the same "
+        f"{v['n']:,} station-hours "
+        f"({v['start']:%b %d} to {v['end']:%b %d}).",
+        style={"fontSize": "11px", "color": "#94a3b8", "marginBottom": "6px",
+               "lineHeight": "1.5"})]
+    for name, rmse_c in rows:
+        is_best = rmse_c == best
+        body.append(html.Div([
+            html.Span(name, style={"color": "#e2e8f0" if is_best else "#94a3b8"}),
+            html.Span(f"{conv(rmse_c):.2f}{unit_label} RMSE",
+                      style={"float": "right", "fontWeight": "700" if is_best else "400",
+                             "color": "#4ade80" if is_best else "#94a3b8"}),
+        ], style={"fontSize": "12px", "padding": "3px 0",
+                  "borderBottom": "1px solid #1e293b"}))
+    body.append(html.Div(
+        "Method: docs/ml/EXPERIMENTS.md. Scope: 2 m temperature, leads at or "
+        "below 8 h. All rows postdate the model's training data.",
+        style={"fontSize": "10px", "color": "#64748b", "marginTop": "6px"}))
+    return html.Details([
+        html.Summary("Learned forecast correction - live verification",
+                     style={"fontSize": "12px", "color": "#94a3b8", "cursor": "pointer"}),
+        html.Div(body, style={"padding": "8px 4px 2px 4px"}),
+    ], style={"backgroundColor": "#1e293b", "borderRadius": "8px",
+              "padding": "10px 12px", "marginBottom": "8px",
+              "border": "1px solid #334155"})
+
+
 def _gev_distribution_figure(fit: dict, annual_maxima_f: np.ndarray | None,
                              day_max_c: float | None, unit: str) -> go.Figure:
     """The classic EVT "return level plot" for one station's GEV fit.
@@ -2926,6 +3028,7 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     ])
     panel_analysis = html.Div([
         _gev_popup(station_id, unit, time_idx),
+        _ml_verification_panel(unit),
     ])
     panel_charts = html.Div([
         dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),

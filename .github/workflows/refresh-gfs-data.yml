@@ -52,6 +52,22 @@ jobs:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: python scripts/log_forecast_obs.py
 
+      # Shadow inference for the learned t2m correction (issue #16):
+      # corrects the fresh forecast at validated leads and logs raw /
+      # baseline / corrected per station to ml_corrections, where the
+      # app's verification panel scores them against arriving
+      # observations. Model artifact is loaded from the database, not
+      # from the repo. Best-effort for the same reason as the step
+      # above. xgboost is installed here rather than in requirements.txt
+      # because only this step needs it; the serving image does not.
+      - name: Log ML corrections (shadow)
+        continue-on-error: true
+        env:
+          NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+        run: |
+          pip install --quiet xgboost
+          python scripts/log_corrections.py
+
       - name: Commit and push if data changed
         id: commit
         run: |
