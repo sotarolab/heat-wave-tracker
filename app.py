@@ -1490,9 +1490,13 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             # The raw forecast for the hours that already happened, next
             # to the observations that verify it. The series begins at
             # the GFS init, so this segment is init -> now: the hindcast
-            # portion of the CURRENT run, drawn dimmed so "what the model
-            # said" can be judged against the dots in every display mode.
-            past_series = line_series[line_series.index <= now_ts]
+            # portion of the CURRENT run. Drawn only in the Raw and
+            # Learned Model views - those are the diagnostic modes where
+            # "what did the model say" is the question. The default
+            # Bias-Corrected view stays the clean consumer view:
+            # observations for the past, one corrected line ahead.
+            past_series = (line_series[line_series.index <= now_ts]
+                           if display_mode != "corrected" else line_series.iloc[:0])
             if not past_series.empty:
                 fig.add_trace(go.Scatter(
                     x=past_series.index,
