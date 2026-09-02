@@ -1487,6 +1487,23 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         meta = _METRIC_META[key]
         line_series = gfs_series[key]
         if now_ts is not None:
+            # The raw forecast for the hours that already happened, next
+            # to the observations that verify it. The series begins at
+            # the GFS init, so this segment is init -> now: the hindcast
+            # portion of the CURRENT run, drawn dimmed so "what the model
+            # said" can be judged against the dots in every display mode.
+            past_series = line_series[line_series.index <= now_ts]
+            if not past_series.empty:
+                fig.add_trace(go.Scatter(
+                    x=past_series.index,
+                    y=_convert_array(past_series.values, unit),
+                    mode="lines", opacity=0.45,
+                    line=dict(color=meta["color"], width=1.5, dash="dot"),
+                    name=f"{meta['label']} (Forecast, before now)",
+                    hovertemplate=(f"{meta['label']} (Forecast, before now): "
+                                   f"%{{y:.1f}}{unit_label}  "
+                                   f"%{{x|%b %d %I:%M %p}}<extra></extra>"),
+                ))
             line_series = line_series[line_series.index > now_ts]
 
         obs_col = {"t2m": "temp_c", "hi": "hi_c", "td2m": "dewpoint_c"}[key]
@@ -1630,21 +1647,8 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             # the whole line reads as a forecast when it is mostly a
             # realized-accuracy trace.
             _past = _mldf[_mlx <= now_ts] if now_ts is not None else _mldf.iloc[:0]
-            # The raw forecast over the SAME verified window, from the
-            # same logged rows, so the past shows the full comparison
-            # the verification panel scores: observations vs raw vs
-            # model. Without this the model line had nothing next to it
-            # to be judged against.
-            if not _past.empty:
-                fig.add_trace(go.Scatter(
-                    x=_past.index.tz_convert(tz),
-                    y=_convert_array(_past.raw_c.values, unit),
-                    mode="lines", opacity=0.5,
-                    line=dict(color="#94a3b8", width=1.5, dash="dash"),
-                    name="Raw GFS (same window)",
-                    hovertemplate=("Raw GFS (same window): %{y:.1f}" + unit_label
-                                   + "  %{x|%b %d %I:%M %p}<extra></extra>"),
-                ))
+            # (The raw forecast over this window is drawn for every metric
+            # and mode by the "before now" segment above.)
             _ahead = _mldf[_mlx > now_ts] if now_ts is not None else _mldf
             for _seg, _op, _nm in ((_past, 0.45, "Learned model (verified)"),
                                    (_ahead, 1.0, "Learned model (ahead)")):
