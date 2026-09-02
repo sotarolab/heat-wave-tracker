@@ -113,3 +113,15 @@ class TestIntervalDegradation:
     def test_load_interval_without_db_url(self, monkeypatch):
         monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
         assert correction.load_interval_models() is None
+
+
+class TestMarginForLead:
+    def test_scalar_passthrough(self):
+        assert correction.margin_for_lead(1.5, 30.0) == 1.5
+
+    def test_bin_lookup(self):
+        m = {"0-8": 0.2, "8-24": 0.5, "24-120": 1.0}
+        assert correction.margin_for_lead(m, 0.0) == 0.2
+        assert correction.margin_for_lead(m, 8.0) == 0.2
+        assert correction.margin_for_lead(m, 8.1) == 0.5
+        assert correction.margin_for_lead(m, 200.0) == 1.0  # beyond last bin

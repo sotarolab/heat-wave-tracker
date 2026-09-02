@@ -216,7 +216,12 @@ def load_interval_models(db_url: str | None = None, version: str = MODEL_VERSION
             if meta.get("point_model_version") != version:
                 print("[correction] interval calibrated for a different model version - band disabled")
                 return None
-            margin = float(meta["cqr_margin_c"])
+            # Either a single scalar margin (v1) or a per-lead-bin dict
+            # (v2's group-conditional calibration); margin_for_lead
+            # resolves both at application time.
+            margin = meta.get("margins_by_lead", None)
+            if margin is None:
+                margin = float(meta["cqr_margin_c"])
             with tempfile.NamedTemporaryFile(suffix=".json") as f:
                 f.write(bytes(art)); f.flush()
                 m = xgb.XGBRegressor(); m.load_model(f.name)
@@ -235,3 +240,19 @@ def apply_margin(q_lo: np.ndarray, q_hi: np.ndarray, margin_c: float) -> tuple[n
     lo = np.asarray(q_lo, float) - margin_c
     hi = np.asarray(q_hi, float) + margin_c
     return np.minimum(lo, hi), np.maximum(lo, hi)
+
+
+def margin_for_lead(margin, lead_h: float) -> float:
+    """Resolve a calibration margin for one lead. Accepts the scalar
+    form (one CQR margin) or the per-lead-bin dict keyed "lo-hi"; leads
+    past the last bin use the last bin's margin."""
+    if isinstance(margin, (int, float)):
+        return float(margin)
+    best_hi, best_val, fallback = -1.0, 0.0, 0.0
+    for key, val in margin.items():
+        lo, hi = (float(x) for x in key.split("-"))
+        if lo < lead_h <= hi or (lead_h == 0 and lo == 0):
+            return float(val)
+        if hi > best_hi:
+            best_hi, fallback = hi, float(val)
+    return fallback

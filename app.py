@@ -1099,8 +1099,8 @@ def _corrections_strip(unit: str, selected_station: str | None = None,
     children = [html.H3("Largest model corrections - latest cycle",
                         style={"fontSize": "15px", "color": "#f8fafc",
                                "margin": "0 0 2px 0"}),
-                html.Div("Stations where the learned correction is moving the "
-                         "current forecast most. Click a row to open that station.",
+                html.Div("Stations with the largest ML corrections this cycle. "
+                         "Click to view.",
                          style={"fontSize": "11px", "color": "#64748b",
                                 "marginBottom": "8px"})]
     for rank, (sid, delta) in enumerate(rows[:top_n], 1):
@@ -1658,7 +1658,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                     fill="toself", fillcolor="rgba(168,85,247,0.14)",
                     mode="none",  # few vertices: plotly's auto mode would draw markers
                     line=dict(width=0), hoverinfo="skip", showlegend=True,
-                    name="95% band (learned)",
+                    name="80% band (learned)",
                 ))
             # Split at "now": what already verified vs what is still a
             # forecast. Most of the validated window is usually behind
@@ -1702,6 +1702,15 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                     hovertemplate=f"{meta['label']} (Observed): %{{y:.1f}}{unit_label}  "
                                   f"%{{x|%b %d %I:%M %p}}<extra></extra>",
                 ))
+
+    # Learned view: focus the time axis on the model's window - half a
+    # day of context behind the drawn segment through a few hours past
+    # its end - instead of the full 3-day obs history plus 5-day
+    # forecast, most of which that view does not speak to.
+    if display_mode == "ml" and _ML_LINE is not None and station_id in _ML_LINE and now_ts is not None:
+        _win = _ML_LINE[station_id].index.tz_convert(tz)
+        fig.update_xaxes(range=[(_win.min() - pd.Timedelta(hours=12)).isoformat(),
+                                (now_ts + pd.Timedelta(hours=30)).isoformat()])
 
     # "Now" cursor - the real observed/forecast boundary, not the day/time
     # picked in the Day/Time dropdowns (that's shown in the title instead).
@@ -3237,12 +3246,11 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     fig_feels_like, _ = _build_station_figure(
         station_id, asos_df, time_idx, unit=unit, metrics=["hi"],
         bias_window_hours=window_hours, display_mode=display_mode)
-    # The learned view is about one question - temperature against the
-    # model - so dewpoint stays out of it. The default view keeps the
-    # T/Td pairing the caption promises (line spacing reads as humidity).
-    _td_metrics = ["t2m"] if display_mode == "ml" else ["t2m", "td2m"]
+    # Temperature only: the humidity story lives in the Feels Like
+    # chart, and every display mode of this chart is about one
+    # question - temperature against its correction.
     fig_temp_dewpoint, _ = _build_station_figure(
-        station_id, asos_df, time_idx, unit=unit, metrics=_td_metrics,
+        station_id, asos_df, time_idx, unit=unit, metrics=["t2m"],
         bias_window_hours=window_hours, display_mode=display_mode)
 
     hint  = (f"Station: {station_id} - {stn['name']} ({stn['state']})  "
@@ -3274,7 +3282,7 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     panel_charts = html.Div([
         html.Div("Temperature - observations, model and band"
                  if display_mode == "ml" else
-                 "Temperature & Dewpoint - closer lines mean higher humidity",
+                 "Temperature - forecast and observations",
                  style={"fontSize": "11px", "color": "#64748b", "margin": "4px 0 0 4px"}),
         dcc.Graph(figure=fig_temp_dewpoint, config={"displayModeBar": False}),
         html.Div("Feels Like (Heat Index) - temperature plus humidity load",
