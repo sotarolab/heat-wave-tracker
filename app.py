@@ -3217,10 +3217,14 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
         if verification_stats else []
     )
 
+    # The headline block is the "how unusual is this" cluster: current
+    # reading, departure from normal, the multi-day streak, and then the
+    # historical rarity of the event as the capstone of that thought.
     panel_headline = html.Div([
         _hero_tile(station_id, time_idx, unit, asos_df),
         _climate_context(station_id, unit),
         _overnight_and_streak_panel(station_id),
+        _gev_popup(station_id, unit, time_idx),
     ])
     # Reading order for the ML focus: charts, then the verification of
     # the lines just shown, with the rarity analysis as the closing
@@ -3238,8 +3242,7 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
                  style={"fontSize": "11px", "color": "#64748b", "margin": "8px 0 0 4px"}),
         dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
     ])
-    panel_verification = html.Div(
-        [_gev_popup(station_id, unit, time_idx)] + verification_children)
+    panel_verification = html.Div(verification_children)
     return (panel_headline, panel_analysis, panel_charts, panel_verification,
             hint, *window_outputs)
 
