@@ -1072,6 +1072,61 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
     ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "12px 14px"})
 
 
+def _corrections_strip(unit: str, selected_station: str | None = None,
+                       top_n: int = 5) -> html.Div:
+    """The stations where the learned model is currently moving the
+    forecast most (replaces the forecast-ranked leaderboard - this strip
+    is driven by the model's own output for the current cycle, so it
+    shows the correction working rather than ranking a forecast).
+
+    Rows reuse the leaderboard-station pattern id, so the existing
+    click-to-select callback drives them unchanged. Empty (invisible)
+    when no corrections are loaded for this init.
+    """
+    if not _ML_LINE:
+        return html.Div()
+    rows = []
+    for sid, df in _ML_LINE.items():
+        last = df.iloc[-1]
+        if pd.isna(last.raw_c):
+            continue
+        rows.append((sid, float(last.ml_c - last.raw_c)))
+    if not rows:
+        return html.Div()
+    rows.sort(key=lambda r: -abs(r[1]))
+    unit_label = _unit_label(unit)
+
+    children = [html.H3("Largest model corrections - latest cycle",
+                        style={"fontSize": "15px", "color": "#f8fafc",
+                               "margin": "0 0 2px 0"}),
+                html.Div("Stations where the learned correction is moving the "
+                         "current forecast most. Click a row to open that station.",
+                         style={"fontSize": "11px", "color": "#64748b",
+                                "marginBottom": "8px"})]
+    for rank, (sid, delta) in enumerate(rows[:top_n], 1):
+        stn = get_station(sid) or {"name": sid, "state": ""}
+        d_disp = _convert_delta(delta, unit)
+        warm = delta > 0
+        is_sel = sid == selected_station
+        children.append(html.Div([
+            html.Span(f"{rank}", style={"width": "22px", "color": "#64748b"}),
+            html.Span(f"{stn['name']} ({stn['state']})",
+                      style={"flex": "1", "color": "#f8fafc",
+                             "fontWeight": "700" if is_sel else "400"}),
+            html.Span(f"{d_disp:+.1f}{unit_label}",
+                      style={"width": "80px", "textAlign": "right", "fontWeight": "600",
+                             "color": "#f87171" if warm else "#60a5fa"}),
+        ],
+            id={"type": "leaderboard-station", "index": sid},
+            n_clicks=0,
+            style={"display": "flex", "alignItems": "center", "cursor": "pointer",
+                   "padding": "6px 10px", "borderRadius": "6px", "fontSize": "13px",
+                   "backgroundColor": "#1e293b" if is_sel else "transparent",
+                   "borderBottom": "1px solid #1e293b"},
+        ))
+    return html.Div(children, style={"maxWidth": "440px"})
+
+
 def _risk_legend() -> html.Div:
     """Standalone risk-category legend, placed right under the main map so
     the color coding is explained wherever it appears on screen. A row of
@@ -1432,6 +1487,27 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         meta = _METRIC_META[key]
         line_series = gfs_series[key]
         if now_ts is not None:
+            # The raw forecast for the hours that already happened, next
+            # to the observations that verify it. The series begins at
+            # the GFS init, so this segment is init -> now: the hindcast
+            # portion of the CURRENT run. Drawn only in the Raw and
+            # Learned Model views - those are the diagnostic modes where
+            # "what did the model say" is the question. The default
+            # Bias-Corrected view stays the clean consumer view:
+            # observations for the past, one corrected line ahead.
+            past_series = (line_series[line_series.index <= now_ts]
+                           if display_mode != "corrected" else line_series.iloc[:0])
+            if not past_series.empty:
+                fig.add_trace(go.Scatter(
+                    x=past_series.index,
+                    y=_convert_array(past_series.values, unit),
+                    mode="lines", opacity=0.45,
+                    line=dict(color=meta["color"], width=1.5, dash="dot"),
+                    name=f"{meta['label']} (Forecast, before now)",
+                    hovertemplate=(f"{meta['label']} (Forecast, before now): "
+                                   f"%{{y:.1f}}{unit_label}  "
+                                   f"%{{x|%b %d %I:%M %p}}<extra></extra>"),
+                ))
             line_series = line_series[line_series.index > now_ts]
 
         obs_col = {"t2m": "temp_c", "hi": "hi_c", "td2m": "dewpoint_c"}[key]
@@ -1470,9 +1546,17 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         if show_raw:
             best_series = line_series
             pi95_c = None
-            trace_name = f"{meta['label']} (Forecast, raw)"
-            hover = (f"{meta['label']} (Forecast, raw - not bias-corrected): "
-                     f"%{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>")
+            if display_mode == "ml" and key == "t2m":
+                # In the learned view the future line being raw is a
+                # model-scope fact, not a display choice - say so in the
+                # legend instead of leaving it implicit.
+                trace_name = f"{meta['label']} (raw - beyond corrected window)"
+                hover = (f"{meta['label']} (raw - beyond the corrected window): %{{y:.1f}}{unit_label}  "
+                         f"%{{x|%b %d %I:%M %p}}<extra></extra>")
+            else:
+                trace_name = f"{meta['label']} (Forecast, raw)"
+                hover = (f"{meta['label']} (Forecast, raw - not bias-corrected): "
+                         f"%{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>")
         elif bias_result is not None:
             bias_c  = bias_result["bias"]
             pi95_c  = bias_result["pi95_halfwidth"]
@@ -1558,6 +1642,13 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         if (display_mode == "ml" and key == "t2m"
                 and _ML_LINE is not None and station_id in _ML_LINE):
             _mldf = _ML_LINE[station_id]
+            # Display window: the correction is drawn from its init
+            # through now + 24 h. One day ahead is the product promise;
+            # rows may extend further (logged to 36 h for scoring).
+            if now_ts is not None:
+                _mldf = _mldf[_mldf.index.tz_convert(tz) <= now_ts + pd.Timedelta(hours=24)]
+            if _mldf.empty:
+                _mldf = _ML_LINE[station_id]
             _mlx = _mldf.index.tz_convert(tz)
             if _mldf[["lo_c", "hi_c"]].notna().all(axis=None):
                 fig.add_trace(go.Scatter(
@@ -1575,7 +1666,17 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             # the whole line reads as a forecast when it is mostly a
             # realized-accuracy trace.
             _past = _mldf[_mlx <= now_ts] if now_ts is not None else _mldf.iloc[:0]
+            # (The raw forecast over this window is drawn for every metric
+            # and mode by the "before now" segment above.)
             _ahead = _mldf[_mlx > now_ts] if now_ts is not None else _mldf
+            _last_ml = _mlx.max()
+            if now_ts is not None and _last_ml <= now_ts:
+                fig.add_annotation(
+                    x=_last_ml.tz_convert(tz).isoformat(), y=1.0, yref="paper",
+                    text="learned range ends", showarrow=False,
+                    font=dict(size=9, color="#a855f7"),
+                    xanchor="left", yanchor="top", opacity=0.85,
+                )
             for _seg, _op, _nm in ((_past, 0.45, "Learned model (verified)"),
                                    (_ahead, 1.0, "Learned model (ahead)")):
                 if _seg.empty:
@@ -1956,8 +2057,11 @@ def _ml_verification_stats(days: int = 14) -> dict | None:
                      AND p.forecast_valid_time = c.forecast_valid_time
                     WHERE c.forecast_valid_time >= NOW() - INTERVAL '1 day' * %s
                       AND c.offset_baseline_c IS NOT NULL
-                    GROUP BY c.model_version
-                    ORDER BY c.model_version DESC LIMIT 1""", (days,))
+                      -- Pinned to the incumbent: the public record quotes
+                      -- xgb-v1 until the lead-aware candidate (logged in
+                      -- parallel as xgb-v2) graduates on its own scored rows.
+                      AND c.model_version = 'xgb-v1'
+                    GROUP BY c.model_version LIMIT 1""", (days,))
                 row = cur.fetchone()
         finally:
             conn.close()
@@ -1999,19 +2103,27 @@ def _ml_line_data() -> dict[str, pd.DataFrame] | None:
         conn = psycopg2.connect(db_url, connect_timeout=10)
         try:
             with conn.cursor() as cur:
-                cur.execute("""SELECT station_id, forecast_valid_time,
-                                      corrected_value_c, pi_lo_c, pi_hi_c
-                               FROM ml_corrections
-                               WHERE gfs_init_time = %s
-                               ORDER BY station_id, forecast_valid_time""",
-                            (init.to_pydatetime(),))
-                rows = cur.fetchall()
+                rows = []
+                # The chart draws the lead-aware candidate (v2) when its
+                # rows exist for this init, falling back to the incumbent.
+                # The verification panel stays pinned to v1 either way.
+                for _version in ("xgb-v2", "xgb-v1"):
+                    cur.execute("""SELECT station_id, forecast_valid_time,
+                                          corrected_value_c, pi_lo_c, pi_hi_c,
+                                          raw_value_c
+                                   FROM ml_corrections
+                                   WHERE gfs_init_time = %s AND model_version = %s
+                                   ORDER BY station_id, forecast_valid_time""",
+                                (init.to_pydatetime(), _version))
+                    rows = cur.fetchall()
+                    if rows:
+                        break
         finally:
             conn.close()
         if not rows:
             return None
-        df = pd.DataFrame(rows, columns=["station_id", "time", "ml_c", "lo_c", "hi_c"])
-        return {sid: g.set_index("time")[["ml_c", "lo_c", "hi_c"]]
+        df = pd.DataFrame(rows, columns=["station_id", "time", "ml_c", "lo_c", "hi_c", "raw_c"])
+        return {sid: g.set_index("time")[["ml_c", "lo_c", "hi_c", "raw_c"]]
                 for sid, g in df.groupby("station_id")}
     except Exception as exc:
         print(f"[app] ML line data unavailable ({exc})")
@@ -2567,11 +2679,28 @@ app.layout = html.Div(
                     ),
                 ]),
                 html.Div([
-                    html.Label("Day", style=_LABEL_STYLE),
+                    html.Label("Station", style=_LABEL_STYLE),
                     dcc.Dropdown(
+                        id="station-search",
+                        options=[{"label": f"{st['id']} - {st['name']} ({st['state']})",
+                                  "value": st["id"]}
+                                 for st in sorted(MAJOR_CONUS_STATIONS, key=lambda x: x["name"])],
+                        placeholder="Search 165 stations...",
+                        value=None, clearable=True,
+                        style={**_DROPDOWN_STYLE, "width": "240px"},
+                    ),
+                ]),
+                html.Div([
+                    html.Label("Day", style=_LABEL_STYLE),
+                    # One click per day beats a two-click dropdown for a
+                    # 5-day window; same id and value contract, so the
+                    # downstream callbacks are untouched.
+                    dcc.RadioItems(
                         id="day-dropdown", options=_DAY_OPTIONS,
-                        value=_DEFAULT_DAY_VALUE, clearable=False,
-                        style=_DROPDOWN_STYLE,
+                        value=_DEFAULT_DAY_VALUE, inline=True,
+                        inputStyle={"marginRight": "3px"},
+                        labelStyle={"marginRight": "12px", "fontSize": "12px",
+                                    "color": "#cbd5e1", "cursor": "pointer"},
                     ),
                 ]),
                 html.Div(id="hour-dropdown-wrap", children=[
@@ -2631,17 +2760,6 @@ app.layout = html.Div(
         _page_section(None, None, html.Div(
             style={"padding": "0 24px 24px 24px"},
             children=[
-                dcc.RadioItems(
-                    id="leaderboard-mode",
-                    options=[
-                        {"label": " Today's Peak",     "value": "now"},
-                        {"label": " Peak This Event",  "value": "peak"},
-                    ],
-                    value="now", inline=True,
-                    inputStyle={"marginRight": "4px"},
-                    labelStyle={"marginRight": "14px", "fontSize": "12px", "color": "#cbd5e1"},
-                    style={"marginBottom": "8px"},
-                ),
                 html.Div(id="leaderboard-panel"),
             ],
         )),
@@ -2683,7 +2801,7 @@ app.layout = html.Div(
                                     options=[
                                         {"label": " Bias-Corrected", "value": "corrected"},
                                         {"label": " Raw Forecast",   "value": "raw"},
-                                        {"label": " Learned Model (first 8h)", "value": "ml"},
+                                        {"label": " Learned Model (next 24h)", "value": "ml"},
                                     ],
                                     value="corrected", inline=True,
                                     inputStyle={"marginRight": "4px"},
@@ -2937,10 +3055,9 @@ def update_map(var_key, time_idx, unit, selected_station, viewport_width):
     Input("variable-selector", "value"),
     Input("current-time-idx",  "data"),
     Input("unit-selector",     "value"),
-    Input("leaderboard-mode",  "value"),
     Input("selected-station",  "data"),
 )
-def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode, selected_station):
+def update_leaderboard_and_legend(var_key, time_idx, unit, selected_station):
     """
     Split off from update_map: the leaderboard's pattern-matched row IDs
     and the legend don't need field-map.figure's own rebuild-cost concerns
@@ -2961,18 +3078,8 @@ def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode, sel
     """
     if _GFS_DS is None:
         return html.Div(), html.Div()
-    time_idx = int(time_idx or 0)
-    if leaderboard_mode == "peak":
-        leaderboard = _peak_leaderboard_table(unit, selected_station=selected_station)
-    else:
-        # Day-level label, not the precise instant _et_utc_label gives
-        # elsewhere - the ranking below is now a per-day peak, not tied to
-        # this exact timestamp, so labeling it down to the minute would
-        # overstate the precision of what's actually being shown.
-        day_label = _to_et(_GFS_DS.time.values[time_idx]).strftime("%A, %b %d")
-        leaderboard = _leaderboard_table(time_idx, unit, day_label, selected_station=selected_station)
     legend = _risk_legend()
-    return leaderboard, legend
+    return _corrections_strip(unit, selected_station), legend
 
 
 @app.callback(
@@ -2999,6 +3106,17 @@ def select_station(clickData, current):
         if cdata and isinstance(cdata, str) and cdata.startswith("K"):
             return cdata
     return current
+
+
+@app.callback(
+    Output("selected-station", "data", allow_duplicate=True),
+    Input("station-search", "value"),
+    prevent_initial_call=True,
+)
+def select_station_from_search(value):
+    """Typeahead station picker: the map click and strip rows remain the
+    other two selection paths; clearing the search changes nothing."""
+    return value if value else no_update
 
 
 @app.callback(
@@ -3119,8 +3237,12 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     fig_feels_like, _ = _build_station_figure(
         station_id, asos_df, time_idx, unit=unit, metrics=["hi"],
         bias_window_hours=window_hours, display_mode=display_mode)
+    # The learned view is about one question - temperature against the
+    # model - so dewpoint stays out of it. The default view keeps the
+    # T/Td pairing the caption promises (line spacing reads as humidity).
+    _td_metrics = ["t2m"] if display_mode == "ml" else ["t2m", "td2m"]
     fig_temp_dewpoint, _ = _build_station_figure(
-        station_id, asos_df, time_idx, unit=unit, metrics=["t2m", "td2m"],
+        station_id, asos_df, time_idx, unit=unit, metrics=_td_metrics,
         bias_window_hours=window_hours, display_mode=display_mode)
 
     hint  = (f"Station: {station_id} - {stn['name']} ({stn['state']})  "
@@ -3132,20 +3254,32 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
         if verification_stats else []
     )
 
+    # The headline block is the "how unusual is this" cluster: current
+    # reading, departure from normal, the multi-day streak, and then the
+    # historical rarity of the event as the capstone of that thought.
     panel_headline = html.Div([
         _hero_tile(station_id, time_idx, unit, asos_df),
         _climate_context(station_id, unit),
         _overnight_and_streak_panel(station_id),
-    ])
-    panel_analysis = html.Div([
         _gev_popup(station_id, unit, time_idx),
+    ])
+    # Reading order for the ML focus: charts, then the verification of
+    # the lines just shown, with the rarity analysis as the closing
+    # context in the last section rather than between them.
+    panel_analysis = html.Div([
         _ml_verification_panel(unit),
     ])
+    # Temperature leads: it is the corrected variable, so the chart the
+    # Show radio acts on comes first; Feels Like follows as the heat lens.
     panel_charts = html.Div([
-        dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
-        html.Div("Temperature & Dewpoint - closer lines mean higher humidity",
+        html.Div("Temperature - observations, model and band"
+                 if display_mode == "ml" else
+                 "Temperature & Dewpoint - closer lines mean higher humidity",
                  style={"fontSize": "11px", "color": "#64748b", "margin": "4px 0 0 4px"}),
         dcc.Graph(figure=fig_temp_dewpoint, config={"displayModeBar": False}),
+        html.Div("Feels Like (Heat Index) - temperature plus humidity load",
+                 style={"fontSize": "11px", "color": "#64748b", "margin": "8px 0 0 4px"}),
+        dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
     ])
     panel_verification = html.Div(verification_children)
     return (panel_headline, panel_analysis, panel_charts, panel_verification,

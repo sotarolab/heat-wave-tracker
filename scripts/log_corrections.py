@@ -46,18 +46,26 @@ def main() -> None:
     if ds is None:
         print("[log_corrections] no GFS data - skipping")
         return
-    model = correction.load_model()
+    # Every registered version logs side by side under its own
+    # model_version, each within its own lead cap - the incumbent's
+    # public record continues while the candidate accumulates its own.
+    for version, vcfg in correction.VERSIONS.items():
+        _log_one_version(ds, version, vcfg)
+
+
+def _log_one_version(ds, version: str, vcfg: dict) -> None:
+    model = correction.load_model(version=version)
     if model is None:
-        print("[log_corrections] no model - skipping")
+        print(f"[log_corrections] no model {version} - skipping")
         return
-    interval = correction.load_interval_models()   # None disables the band, not the row
+    interval = correction.load_interval_models(version=version)   # None disables the band, not the row
 
     init = pd.Timestamp(ds.attrs["gfs_init"]).tz_localize("UTC")
     hist7, offset = correction.error_history(init)
     print(f"[log_corrections] init {init}  history: {len(hist7)} stations")
 
     valid = pd.DatetimeIndex(ds.time.values).tz_localize("UTC")
-    mask = correction.validated_mask(valid, init)
+    mask = correction.validated_mask(valid, init, max_lead_h=vcfg["log_lead_h"])
     if not mask.any():
         print("[log_corrections] no steps within validated lead - skipping")
         return
@@ -80,12 +88,12 @@ def main() -> None:
             if np.isnan(raw):
                 continue
             rows.append((stn["id"], vt.to_pydatetime(), init.to_pydatetime(),
-                         correction.MODEL_VERSION, float(lead), float(raw),
+                         version, float(lead), float(raw),
                          float(raw + base) if base is not None else None,
                          float(raw + c),
                          float(raw + l) if not np.isnan(l) else None,
                          float(raw + h) if not np.isnan(h) else None))
-    print(f"[log_corrections] {len(rows)} rows for {mask.sum()} steps")
+    print(f"[log_corrections] {version}: {len(rows)} rows for {mask.sum()} steps")
     if not rows:
         return
 
@@ -110,7 +118,7 @@ def main() -> None:
                 WHERE ml_corrections.pi_lo_c IS NULL
                 RETURNING 1
             """, rows, fetch=True)
-            print(f"[log_corrections] inserted (new rows: {len(inserted)})")
+            print(f"[log_corrections] {version}: inserted (new rows: {len(inserted)})")
     finally:
         conn.close()
 

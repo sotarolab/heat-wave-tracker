@@ -37,8 +37,19 @@ import numpy as np
 import pandas as pd
 
 MODEL_NAME = "t2m_correction"
-MODEL_VERSION = "xgb-v1"
-VALIDATED_LEAD_H = 8.0
+
+# Version registry. v1 is the incumbent the public verification panel is
+# pinned to; v2 is the lead-aware candidate trained on the reforecast
+# archive mined from git history (issue #19), validated across the full
+# 0-120 h range under an init-gapped split. Both log corrections side by
+# side under their own model_version, so the candidate accumulates its
+# own scored record without touching the incumbent's.
+VERSIONS = {
+    "xgb-v1": {"validated_lead_h": 8.0,   "log_lead_h": 8.0},
+    "xgb-v2": {"validated_lead_h": 120.0, "log_lead_h": 36.0},
+}
+MODEL_VERSION = "xgb-v1"          # default/incumbent
+VALIDATED_LEAD_H = 8.0            # incumbent's scope (back-compat)
 
 FEATURES = ["fcst_t2m", "dewpoint_dep", "lat", "lon", "hour_sin", "hour_cos",
             "doy_sin", "doy_cos", "lead_h", "stn_err_7d"]
@@ -54,7 +65,7 @@ def _db_url() -> str | None:
     return os.environ.get("NEON_DATABASE_URL")
 
 
-def load_model(db_url: str | None = None):
+def load_model(db_url: str | None = None, version: str = MODEL_VERSION):
     """Fetch the artifact from ml_models and return a fitted regressor,
     or None if the database, row, or xgboost is unavailable."""
     db_url = db_url or _db_url()
@@ -68,12 +79,12 @@ def load_model(db_url: str | None = None):
         try:
             with conn.cursor() as cur:
                 cur.execute("SELECT artifact FROM ml_models WHERE name=%s AND version=%s",
-                            (MODEL_NAME, MODEL_VERSION))
+                            (MODEL_NAME, version))
                 row = cur.fetchone()
         finally:
             conn.close()
         if row is None:
-            print(f"[correction] no artifact {MODEL_NAME}/{MODEL_VERSION} in ml_models")
+            print(f"[correction] no artifact {MODEL_NAME}/{version} in ml_models")
             return None
         with tempfile.NamedTemporaryFile(suffix=".json") as f:
             f.write(bytes(row[0])); f.flush()
@@ -155,12 +166,13 @@ def build_features(station: dict, valid_times_utc: pd.DatetimeIndex,
 
 
 def validated_mask(valid_times_utc: pd.DatetimeIndex,
-                   init_time_utc: pd.Timestamp) -> np.ndarray:
+                   init_time_utc: pd.Timestamp,
+                   max_lead_h: float = VALIDATED_LEAD_H) -> np.ndarray:
     idx = pd.DatetimeIndex(valid_times_utc)
     if idx.tz is None:
         idx = idx.tz_localize("UTC")
     lead_h = (idx - init_time_utc).total_seconds() / 3600.0
-    return (lead_h >= 0) & (lead_h <= VALIDATED_LEAD_H)
+    return (lead_h >= 0) & (lead_h <= max_lead_h)
 
 
 # ── calibrated prediction interval (issue #17) ───────────────────────────
@@ -168,7 +180,7 @@ def validated_mask(valid_times_utc: pd.DatetimeIndex,
 INTERVAL_ALPHA = 0.05
 
 
-def load_interval_models(db_url: str | None = None):
+def load_interval_models(db_url: str | None = None, version: str = MODEL_VERSION):
     """Both quantile artifacts plus the CQR margin calibrated in
     notebooks/05_interval_calibration.ipynb. Returns (q_lo, q_hi,
     margin_c) or None under the same degradation rules as load_model.
@@ -190,7 +202,7 @@ def load_interval_models(db_url: str | None = None):
             with conn.cursor() as cur:
                 cur.execute("""SELECT name, artifact, metadata FROM ml_models
                                WHERE name IN ('t2m_interval_q025','t2m_interval_q975')
-                                 AND version=%s""", (MODEL_VERSION,))
+                                 AND version=%s""", (version,))
                 rows = {name: (art, meta) for name, art, meta in cur.fetchall()}
         finally:
             conn.close()
@@ -201,7 +213,7 @@ def load_interval_models(db_url: str | None = None):
         margin = None
         for name, (art, meta) in rows.items():
             meta = meta if isinstance(meta, dict) else json.loads(meta)
-            if meta.get("point_model_version") != MODEL_VERSION:
+            if meta.get("point_model_version") != version:
                 print("[correction] interval calibrated for a different model version - band disabled")
                 return None
             margin = float(meta["cqr_margin_c"])
