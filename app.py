@@ -1537,6 +1537,39 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             hovertemplate=hover,
         ))
 
+        # Learned-model correction (issue #17): drawn from the rows the
+        # refresh workflow logged for this exact init, never recomputed
+        # here, so the chart, the database record, and the verification
+        # panel can only agree. t2m only (the trained metric), and only
+        # the validated <= 8 h of lead the rows cover - a deliberately
+        # short segment rather than an extrapolated long one; the
+        # measured failure of extrapolation is in docs/ml/EXPERIMENTS.md.
+        # Named to be distinguishable from the same-day scheme above,
+        # which is a different correction with a different information
+        # source (today's own observations vs trained history).
+        if key == "t2m" and _ML_LINE is not None and station_id in _ML_LINE:
+            _mldf = _ML_LINE[station_id]
+            _mlx = _mldf.index.tz_convert(tz)
+            if _mldf[["lo_c", "hi_c"]].notna().all(axis=None):
+                fig.add_trace(go.Scatter(
+                    x=list(_mlx) + list(_mlx[::-1]),
+                    y=list(_convert_array(_mldf.hi_c.values, unit))
+                      + list(_convert_array(_mldf.lo_c.values, unit)[::-1]),
+                    fill="toself", fillcolor="rgba(168,85,247,0.14)",
+                    mode="none",  # few vertices: plotly's auto mode would draw markers
+                    line=dict(width=0), hoverinfo="skip", showlegend=True,
+                    name="95% band (learned model)",
+                ))
+            fig.add_trace(go.Scatter(
+                x=_mlx, y=_convert_array(_mldf.ml_c.values, unit),
+                mode="lines+markers",
+                line=dict(color="#a855f7", width=2),
+                marker=dict(size=5, color="#a855f7"),
+                name="Corrected (learned model, first 8h)",
+                hovertemplate=("Corrected (learned model): %{y:.1f}" + unit_label
+                               + "  %{x|%b %d %I:%M %p}<extra></extra>"),
+            ))
+
         if not obs_local.empty:
             obs_points = obs_local.dropna(subset=[obs_col])
             if not obs_points.empty:
@@ -1892,7 +1925,10 @@ def _ml_verification_stats(days: int = 14) -> dict | None:
                            MIN(c.forecast_valid_time), MAX(c.forecast_valid_time),
                            SQRT(AVG(POWER(c.raw_value_c       - p.observed_value_c, 2))),
                            SQRT(AVG(POWER(c.offset_baseline_c - p.observed_value_c, 2))),
-                           SQRT(AVG(POWER(c.corrected_value_c - p.observed_value_c, 2)))
+                           SQRT(AVG(POWER(c.corrected_value_c - p.observed_value_c, 2))),
+                           AVG(CASE WHEN c.pi_lo_c IS NULL THEN NULL
+                                    WHEN p.observed_value_c BETWEEN c.pi_lo_c AND c.pi_hi_c
+                                    THEN 1.0 ELSE 0.0 END)
                     FROM ml_corrections c
                     JOIN forecast_obs_pairs p
                       ON p.station_id = c.station_id
@@ -1907,10 +1943,11 @@ def _ml_verification_stats(days: int = 14) -> dict | None:
             conn.close()
         if row is None or row[1] == 0:
             return None
-        version, n, t0, t1, rmse_raw, rmse_off, rmse_ml = row
+        version, n, t0, t1, rmse_raw, rmse_off, rmse_ml, band_cov = row
         return {"version": version, "n": int(n), "start": t0, "end": t1,
                 "rmse_raw": float(rmse_raw), "rmse_offset": float(rmse_off),
-                "rmse_ml": float(rmse_ml)}
+                "rmse_ml": float(rmse_ml),
+                "band_coverage": float(band_cov) if band_cov is not None else None}
     except Exception as exc:
         print(f"[app] ML verification unavailable ({exc})")
         return None
@@ -1919,6 +1956,51 @@ def _ml_verification_stats(days: int = 14) -> dict | None:
 # Fetched once at startup, same lifecycle as the data file: the app
 # restarts on every 6-hourly deploy, so this stays one cycle fresh.
 _ML_VERIF = _ml_verification_stats()
+
+
+def _ml_line_data() -> dict[str, pd.DataFrame] | None:
+    """Logged ML corrections and calibrated band for the loaded file's
+    own GFS init, per station (issue #17).
+
+    Read from ml_corrections rather than recomputed: inference runs in
+    the refresh workflow, which writes these rows in the same cycle that
+    commits the forecast file, so the serving image needs no ML
+    dependency and the drawn line is byte-identical to what the
+    verification panel later scores. Returns None when the database is
+    unreachable or the current init has no logged rows (the line is
+    then simply absent, like the panel).
+    """
+    db_url = os.environ.get("NEON_DATABASE_URL")
+    if not db_url or _GFS_DS is None:
+        return None
+    init = pd.Timestamp(_GFS_DS.attrs.get("gfs_init")).tz_localize("UTC")
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url, connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT station_id, forecast_valid_time,
+                                      corrected_value_c, pi_lo_c, pi_hi_c
+                               FROM ml_corrections
+                               WHERE gfs_init_time = %s
+                               ORDER BY station_id, forecast_valid_time""",
+                            (init.to_pydatetime(),))
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+        if not rows:
+            return None
+        df = pd.DataFrame(rows, columns=["station_id", "time", "ml_c", "lo_c", "hi_c"])
+        return {sid: g.set_index("time")[["ml_c", "lo_c", "hi_c"]]
+                for sid, g in df.groupby("station_id")}
+    except Exception as exc:
+        print(f"[app] ML line data unavailable ({exc})")
+        return None
+
+
+_ML_LINE = _ml_line_data()
+print(f"[app] ML corrected line: "
+      f"{len(_ML_LINE) if _ML_LINE else 0} stations for this init")
 
 
 def _ml_verification_panel(unit: str) -> html.Details:
@@ -1951,6 +2033,14 @@ def _ml_verification_panel(unit: str) -> html.Details:
             html.Span(f"{conv(rmse_c):.2f}{unit_label} RMSE",
                       style={"float": "right", "fontWeight": "700" if is_best else "400",
                              "color": "#4ade80" if is_best else "#94a3b8"}),
+        ], style={"fontSize": "12px", "padding": "3px 0",
+                  "borderBottom": "1px solid #1e293b"}))
+    if v.get("band_coverage") is not None:
+        body.append(html.Div([
+            html.Span("95% band, observed coverage",
+                      style={"color": "#94a3b8"}),
+            html.Span(f"{100*v['band_coverage']:.1f}%",
+                      style={"float": "right", "color": "#94a3b8"}),
         ], style={"fontSize": "12px", "padding": "3px 0",
                   "borderBottom": "1px solid #1e293b"}))
     body.append(html.Div(

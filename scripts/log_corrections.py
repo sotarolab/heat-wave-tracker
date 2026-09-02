@@ -50,6 +50,7 @@ def main() -> None:
     if model is None:
         print("[log_corrections] no model - skipping")
         return
+    interval = correction.load_interval_models()   # None disables the band, not the row
 
     init = pd.Timestamp(ds.attrs["gfs_init"]).tz_localize("UTC")
     hist7, offset = correction.error_history(init)
@@ -69,14 +70,21 @@ def main() -> None:
         X = correction.build_features(stn, valid[mask], t, td, init,
                                       hist7.get(stn["id"], 0.0))
         corr = model.predict(X)
+        if interval is not None:
+            qlo_m, qhi_m, margin = interval
+            lo, hi = correction.apply_margin(qlo_m.predict(X), qhi_m.predict(X), margin)
+        else:
+            lo = hi = np.full(len(X), np.nan)
         base = offset.get(stn["id"])
-        for vt, lead, raw, c in zip(valid[mask], X.lead_h, t, corr):
+        for vt, lead, raw, c, l, h in zip(valid[mask], X.lead_h, t, corr, lo, hi):
             if np.isnan(raw):
                 continue
             rows.append((stn["id"], vt.to_pydatetime(), init.to_pydatetime(),
                          correction.MODEL_VERSION, float(lead), float(raw),
                          float(raw + base) if base is not None else None,
-                         float(raw + c)))
+                         float(raw + c),
+                         float(raw + l) if not np.isnan(l) else None,
+                         float(raw + h) if not np.isnan(h) else None))
     print(f"[log_corrections] {len(rows)} rows for {mask.sum()} steps")
     if not rows:
         return
@@ -93,10 +101,13 @@ def main() -> None:
                 INSERT INTO ml_corrections
                     (station_id, forecast_valid_time, gfs_init_time,
                      model_version, lead_h, raw_value_c,
-                     offset_baseline_c, corrected_value_c)
+                     offset_baseline_c, corrected_value_c, pi_lo_c, pi_hi_c)
                 VALUES %s
                 ON CONFLICT (station_id, forecast_valid_time,
-                             gfs_init_time, model_version) DO NOTHING
+                             gfs_init_time, model_version)
+                DO UPDATE SET pi_lo_c = EXCLUDED.pi_lo_c,
+                              pi_hi_c = EXCLUDED.pi_hi_c
+                WHERE ml_corrections.pi_lo_c IS NULL
                 RETURNING 1
             """, rows, fetch=True)
             print(f"[log_corrections] inserted (new rows: {len(inserted)})")
