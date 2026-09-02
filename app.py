@@ -1630,6 +1630,21 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             # the whole line reads as a forecast when it is mostly a
             # realized-accuracy trace.
             _past = _mldf[_mlx <= now_ts] if now_ts is not None else _mldf.iloc[:0]
+            # The raw forecast over the SAME verified window, from the
+            # same logged rows, so the past shows the full comparison
+            # the verification panel scores: observations vs raw vs
+            # model. Without this the model line had nothing next to it
+            # to be judged against.
+            if not _past.empty:
+                fig.add_trace(go.Scatter(
+                    x=_past.index.tz_convert(tz),
+                    y=_convert_array(_past.raw_c.values, unit),
+                    mode="lines", opacity=0.5,
+                    line=dict(color="#94a3b8", width=1.5, dash="dash"),
+                    name="Raw GFS (same window)",
+                    hovertemplate=("Raw GFS (same window): %{y:.1f}" + unit_label
+                                   + "  %{x|%b %d %I:%M %p}<extra></extra>"),
+                ))
             _ahead = _mldf[_mlx > now_ts] if now_ts is not None else _mldf
             for _seg, _op, _nm in ((_past, 0.45, "Learned model (verified)"),
                                    (_ahead, 1.0, "Learned model (ahead)")):
