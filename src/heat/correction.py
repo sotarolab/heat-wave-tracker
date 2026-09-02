@@ -161,3 +161,65 @@ def validated_mask(valid_times_utc: pd.DatetimeIndex,
         idx = idx.tz_localize("UTC")
     lead_h = (idx - init_time_utc).total_seconds() / 3600.0
     return (lead_h >= 0) & (lead_h <= VALIDATED_LEAD_H)
+
+
+# ── calibrated prediction interval (issue #17) ───────────────────────────
+
+INTERVAL_ALPHA = 0.05
+
+
+def load_interval_models(db_url: str | None = None):
+    """Both quantile artifacts plus the CQR margin calibrated in
+    notebooks/05_interval_calibration.ipynb. Returns (q_lo, q_hi,
+    margin_c) or None under the same degradation rules as load_model.
+
+    The margin is stored in the artifacts' metadata and is tied to the
+    point model version: a retrained model requires recalibration, so a
+    version mismatch refuses to load rather than shipping a stale band.
+    """
+    db_url = db_url or _db_url()
+    if not db_url:
+        return None
+    try:
+        import json
+        import tempfile
+        import psycopg2
+        import xgboost as xgb
+        conn = psycopg2.connect(db_url, connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("""SELECT name, artifact, metadata FROM ml_models
+                               WHERE name IN ('t2m_interval_q025','t2m_interval_q975')
+                                 AND version=%s""", (MODEL_VERSION,))
+                rows = {name: (art, meta) for name, art, meta in cur.fetchall()}
+        finally:
+            conn.close()
+        if set(rows) != {"t2m_interval_q025", "t2m_interval_q975"}:
+            print("[correction] interval artifacts incomplete - band disabled")
+            return None
+        models = {}
+        margin = None
+        for name, (art, meta) in rows.items():
+            meta = meta if isinstance(meta, dict) else json.loads(meta)
+            if meta.get("point_model_version") != MODEL_VERSION:
+                print("[correction] interval calibrated for a different model version - band disabled")
+                return None
+            margin = float(meta["cqr_margin_c"])
+            with tempfile.NamedTemporaryFile(suffix=".json") as f:
+                f.write(bytes(art)); f.flush()
+                m = xgb.XGBRegressor(); m.load_model(f.name)
+            models[name] = m
+        return models["t2m_interval_q025"], models["t2m_interval_q975"], margin
+    except Exception as exc:
+        print(f"[correction] interval models unavailable ({exc})")
+        return None
+
+
+def apply_margin(q_lo: np.ndarray, q_hi: np.ndarray, margin_c: float) -> tuple[np.ndarray, np.ndarray]:
+    """CQR band assembly: widen both raw quantile predictions by the
+    calibrated margin. Split out as a pure function so the ordering
+    guarantee (lo <= hi after widening, given lo <= hi before) is
+    testable without artifacts."""
+    lo = np.asarray(q_lo, float) - margin_c
+    hi = np.asarray(q_hi, float) + margin_c
+    return np.minimum(lo, hi), np.maximum(lo, hi)

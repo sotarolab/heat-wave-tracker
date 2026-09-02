@@ -91,3 +91,25 @@ class TestDegradation:
                            "postgresql://u:p@127.0.0.1:59999/none?connect_timeout=1")
         h7, off = correction.error_history(INIT)
         assert h7 == {} and off == {}
+
+
+class TestApplyMargin:
+    def test_widens_symmetrically(self):
+        lo, hi = correction.apply_margin(np.array([-1.0]), np.array([1.0]), 0.5)
+        assert lo[0] == -1.5 and hi[0] == 1.5
+
+    def test_ordering_preserved_even_if_quantiles_cross(self):
+        # Quantile regressors can cross on rare inputs; the band must
+        # still come back ordered rather than inverted.
+        lo, hi = correction.apply_margin(np.array([0.4]), np.array([0.1]), 0.05)
+        assert lo[0] <= hi[0]
+
+    def test_zero_margin_identity(self):
+        lo, hi = correction.apply_margin(np.array([-2.0, 0.0]), np.array([1.0, 3.0]), 0.0)
+        assert list(lo) == [-2.0, 0.0] and list(hi) == [1.0, 3.0]
+
+
+class TestIntervalDegradation:
+    def test_load_interval_without_db_url(self, monkeypatch):
+        monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
+        assert correction.load_interval_models() is None
