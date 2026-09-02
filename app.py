@@ -3222,8 +3222,10 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
         _climate_context(station_id, unit),
         _overnight_and_streak_panel(station_id),
     ])
+    # Reading order for the ML focus: charts, then the verification of
+    # the lines just shown, with the rarity analysis as the closing
+    # context in the last section rather than between them.
     panel_analysis = html.Div([
-        _gev_popup(station_id, unit, time_idx),
         _ml_verification_panel(unit),
     ])
     # Temperature leads: it is the corrected variable, so the chart the
@@ -3236,7 +3238,8 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
                  style={"fontSize": "11px", "color": "#64748b", "margin": "8px 0 0 4px"}),
         dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
     ])
-    panel_verification = html.Div(verification_children)
+    panel_verification = html.Div(
+        [_gev_popup(station_id, unit, time_idx)] + verification_children)
     return (panel_headline, panel_analysis, panel_charts, panel_verification,
             hint, *window_outputs)
 
