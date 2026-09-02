@@ -1319,7 +1319,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                           time_idx: int, unit: str = "C",
                           metrics: list[str] | None = None,
                           bias_window_hours: float | None = None,
-                          show_raw: bool = False) -> go.Figure:
+                          display_mode: str = "corrected") -> go.Figure:
     """GFS forecast and ASOS observations for one station.
 
     Plotted in the station's own local time zone and chosen display
@@ -1346,10 +1346,17 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         How far back the bias correction looks, forwarded to
         today_forecast_bias. None uses all of today (the interactive
         same-day window control).
-    show_raw : bool, optional
-        If True, plot the unmodified model forecast instead of the
-        bias-corrected line. Full-transparency toggle, still exactly
-        one line at a time.
+    display_mode : str, optional
+        Which correction paradigm the chart shows - exactly one at a
+        time, chosen by the Show radio. "corrected": the same-day
+        bias-corrected best estimate (default). "raw": the unmodified
+        model output. "ml": the raw line plus the learned model's
+        correction and calibrated band overlaid on its validated first
+        8 h of lead (t2m only, the trained metric); the segment already
+        behind "now" is dimmed and labeled verified, because with GFS
+        publishing 4 to 5 h after init, most of the validated window
+        has usually already happened - what that dimmed piece shows is
+        the correction's realized accuracy, not a forecast.
 
     Returns
     -------
@@ -1437,6 +1444,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         # *is* the raw forecast, unchanged - graceful fallback, not a
         # gap. Labeled honestly either way so "corrected" never appears
         # unless a correction was actually applied.
+        show_raw = display_mode != "corrected"   # "raw" and "ml" both start from the raw line
         bias_result = None
         if now_ts is not None and not line_series.empty:
             bias_result = _today_forecast_bias(gfs_series[key], obs_local, obs_col,
@@ -1547,7 +1555,8 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         # Named to be distinguishable from the same-day scheme above,
         # which is a different correction with a different information
         # source (today's own observations vs trained history).
-        if key == "t2m" and _ML_LINE is not None and station_id in _ML_LINE:
+        if (display_mode == "ml" and key == "t2m"
+                and _ML_LINE is not None and station_id in _ML_LINE):
             _mldf = _ML_LINE[station_id]
             _mlx = _mldf.index.tz_convert(tz)
             if _mldf[["lo_c", "hi_c"]].notna().all(axis=None):
@@ -1558,17 +1567,28 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                     fill="toself", fillcolor="rgba(168,85,247,0.14)",
                     mode="none",  # few vertices: plotly's auto mode would draw markers
                     line=dict(width=0), hoverinfo="skip", showlegend=True,
-                    name="95% band (learned model)",
+                    name="95% band (learned)",
                 ))
-            fig.add_trace(go.Scatter(
-                x=_mlx, y=_convert_array(_mldf.ml_c.values, unit),
-                mode="lines+markers",
-                line=dict(color="#a855f7", width=2),
-                marker=dict(size=5, color="#a855f7"),
-                name="Corrected (learned model, first 8h)",
-                hovertemplate=("Corrected (learned model): %{y:.1f}" + unit_label
-                               + "  %{x|%b %d %I:%M %p}<extra></extra>"),
-            ))
+            # Split at "now": what already verified vs what is still a
+            # forecast. Most of the validated window is usually behind
+            # now (GFS publishes 4-5 h after init), so without the split
+            # the whole line reads as a forecast when it is mostly a
+            # realized-accuracy trace.
+            _past = _mldf[_mlx <= now_ts] if now_ts is not None else _mldf.iloc[:0]
+            _ahead = _mldf[_mlx > now_ts] if now_ts is not None else _mldf
+            for _seg, _op, _nm in ((_past, 0.45, "Learned model (verified)"),
+                                   (_ahead, 1.0, "Learned model (ahead)")):
+                if _seg.empty:
+                    continue
+                fig.add_trace(go.Scatter(
+                    x=_seg.index.tz_convert(tz), y=_convert_array(_seg.ml_c.values, unit),
+                    mode="lines+markers", opacity=_op,
+                    line=dict(color="#a855f7", width=2),
+                    marker=dict(size=5, color="#a855f7"),
+                    name=_nm,
+                    hovertemplate=(_nm + ": %{y:.1f}" + unit_label
+                                   + "  %{x|%b %d %I:%M %p}<extra></extra>"),
+                ))
 
         if not obs_local.empty:
             obs_points = obs_local.dropna(subset=[obs_col])
@@ -2663,6 +2683,7 @@ app.layout = html.Div(
                                     options=[
                                         {"label": " Bias-Corrected", "value": "corrected"},
                                         {"label": " Raw Forecast",   "value": "raw"},
+                                        {"label": " Learned Model (first 8h)", "value": "ml"},
                                     ],
                                     value="corrected", inline=True,
                                     inputStyle={"marginRight": "4px"},
@@ -3072,7 +3093,7 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     # fighting with its own Input) - "Last 3h" means the same thing
     # regardless of station, so it can just be read directly.
     window_hours = None if bias_window in (None, "all") else float(bias_window)
-    show_raw = bias_display_mode == "raw"
+    display_mode = bias_display_mode or "corrected"
     all_metrics = ["hi", "t2m", "td2m"]
     _, n_available = _build_station_figure(station_id, asos_df, time_idx, unit=unit, metrics=all_metrics)
 
@@ -3097,10 +3118,10 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     # moisture conditions off a plot without needing a separate RH number.
     fig_feels_like, _ = _build_station_figure(
         station_id, asos_df, time_idx, unit=unit, metrics=["hi"],
-        bias_window_hours=window_hours, show_raw=show_raw)
+        bias_window_hours=window_hours, display_mode=display_mode)
     fig_temp_dewpoint, _ = _build_station_figure(
         station_id, asos_df, time_idx, unit=unit, metrics=["t2m", "td2m"],
-        bias_window_hours=window_hours, show_raw=show_raw)
+        bias_window_hours=window_hours, display_mode=display_mode)
 
     hint  = (f"Station: {station_id} - {stn['name']} ({stn['state']})  "
              f"·  {len(asos_df)} recent ASOS obs  ·  Click another station to switch")
