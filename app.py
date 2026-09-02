@@ -3246,12 +3246,11 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     fig_feels_like, _ = _build_station_figure(
         station_id, asos_df, time_idx, unit=unit, metrics=["hi"],
         bias_window_hours=window_hours, display_mode=display_mode)
-    # The learned view is about one question - temperature against the
-    # model - so dewpoint stays out of it. The default view keeps the
-    # T/Td pairing the caption promises (line spacing reads as humidity).
-    _td_metrics = ["t2m"] if display_mode == "ml" else ["t2m", "td2m"]
+    # Temperature only: the humidity story lives in the Feels Like
+    # chart, and every display mode of this chart is about one
+    # question - temperature against its correction.
     fig_temp_dewpoint, _ = _build_station_figure(
-        station_id, asos_df, time_idx, unit=unit, metrics=_td_metrics,
+        station_id, asos_df, time_idx, unit=unit, metrics=["t2m"],
         bias_window_hours=window_hours, display_mode=display_mode)
 
     hint  = (f"Station: {station_id} - {stn['name']} ({stn['state']})  "
@@ -3283,7 +3282,7 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     panel_charts = html.Div([
         html.Div("Temperature - observations, model and band"
                  if display_mode == "ml" else
-                 "Temperature & Dewpoint - closer lines mean higher humidity",
+                 "Temperature - forecast and observations",
                  style={"fontSize": "11px", "color": "#64748b", "margin": "4px 0 0 4px"}),
         dcc.Graph(figure=fig_temp_dewpoint, config={"displayModeBar": False}),
         html.Div("Feels Like (Heat Index) - temperature plus humidity load",
