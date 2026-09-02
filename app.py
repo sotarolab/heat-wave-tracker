@@ -1072,6 +1072,61 @@ def _leaderboard_table(time_idx: int, unit: str, time_label: str = "",
     ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "12px 14px"})
 
 
+def _corrections_strip(unit: str, selected_station: str | None = None,
+                       top_n: int = 5) -> html.Div:
+    """The stations where the learned model is currently moving the
+    forecast most (replaces the forecast-ranked leaderboard - this strip
+    is driven by the model's own output for the current cycle, so it
+    shows the correction working rather than ranking a forecast).
+
+    Rows reuse the leaderboard-station pattern id, so the existing
+    click-to-select callback drives them unchanged. Empty (invisible)
+    when no corrections are loaded for this init.
+    """
+    if not _ML_LINE:
+        return html.Div()
+    rows = []
+    for sid, df in _ML_LINE.items():
+        last = df.iloc[-1]
+        if pd.isna(last.raw_c):
+            continue
+        rows.append((sid, float(last.ml_c - last.raw_c)))
+    if not rows:
+        return html.Div()
+    rows.sort(key=lambda r: -abs(r[1]))
+    unit_label = _unit_label(unit)
+
+    children = [html.H3("Largest model corrections - latest cycle",
+                        style={"fontSize": "15px", "color": "#f8fafc",
+                               "margin": "0 0 2px 0"}),
+                html.Div("Stations where the learned correction is moving the "
+                         "current forecast most. Click a row to open that station.",
+                         style={"fontSize": "11px", "color": "#64748b",
+                                "marginBottom": "8px"})]
+    for rank, (sid, delta) in enumerate(rows[:top_n], 1):
+        stn = get_station(sid) or {"name": sid, "state": ""}
+        d_disp = _convert_delta(delta, unit)
+        warm = delta > 0
+        is_sel = sid == selected_station
+        children.append(html.Div([
+            html.Span(f"{rank}", style={"width": "22px", "color": "#64748b"}),
+            html.Span(f"{stn['name']} ({stn['state']})",
+                      style={"flex": "1", "color": "#f8fafc",
+                             "fontWeight": "700" if is_sel else "400"}),
+            html.Span(f"{d_disp:+.1f}{unit_label}",
+                      style={"width": "80px", "textAlign": "right", "fontWeight": "600",
+                             "color": "#f87171" if warm else "#60a5fa"}),
+        ],
+            id={"type": "leaderboard-station", "index": sid},
+            n_clicks=0,
+            style={"display": "flex", "alignItems": "center", "cursor": "pointer",
+                   "padding": "6px 10px", "borderRadius": "6px", "fontSize": "13px",
+                   "backgroundColor": "#1e293b" if is_sel else "transparent",
+                   "borderBottom": "1px solid #1e293b"},
+        ))
+    return html.Div(children, style={"maxWidth": "440px"})
+
+
 def _risk_legend() -> html.Div:
     """Standalone risk-category legend, placed right under the main map so
     the color coding is explained wherever it appears on screen. A row of
@@ -2000,7 +2055,8 @@ def _ml_line_data() -> dict[str, pd.DataFrame] | None:
         try:
             with conn.cursor() as cur:
                 cur.execute("""SELECT station_id, forecast_valid_time,
-                                      corrected_value_c, pi_lo_c, pi_hi_c
+                                      corrected_value_c, pi_lo_c, pi_hi_c,
+                                      raw_value_c
                                FROM ml_corrections
                                WHERE gfs_init_time = %s
                                ORDER BY station_id, forecast_valid_time""",
@@ -2010,8 +2066,8 @@ def _ml_line_data() -> dict[str, pd.DataFrame] | None:
             conn.close()
         if not rows:
             return None
-        df = pd.DataFrame(rows, columns=["station_id", "time", "ml_c", "lo_c", "hi_c"])
-        return {sid: g.set_index("time")[["ml_c", "lo_c", "hi_c"]]
+        df = pd.DataFrame(rows, columns=["station_id", "time", "ml_c", "lo_c", "hi_c", "raw_c"])
+        return {sid: g.set_index("time")[["ml_c", "lo_c", "hi_c", "raw_c"]]
                 for sid, g in df.groupby("station_id")}
     except Exception as exc:
         print(f"[app] ML line data unavailable ({exc})")
@@ -2567,11 +2623,28 @@ app.layout = html.Div(
                     ),
                 ]),
                 html.Div([
-                    html.Label("Day", style=_LABEL_STYLE),
+                    html.Label("Station", style=_LABEL_STYLE),
                     dcc.Dropdown(
+                        id="station-search",
+                        options=[{"label": f"{st['id']} - {st['name']} ({st['state']})",
+                                  "value": st["id"]}
+                                 for st in sorted(MAJOR_CONUS_STATIONS, key=lambda x: x["name"])],
+                        placeholder="Search 165 stations...",
+                        value=None, clearable=True,
+                        style={**_DROPDOWN_STYLE, "width": "240px"},
+                    ),
+                ]),
+                html.Div([
+                    html.Label("Day", style=_LABEL_STYLE),
+                    # One click per day beats a two-click dropdown for a
+                    # 5-day window; same id and value contract, so the
+                    # downstream callbacks are untouched.
+                    dcc.RadioItems(
                         id="day-dropdown", options=_DAY_OPTIONS,
-                        value=_DEFAULT_DAY_VALUE, clearable=False,
-                        style=_DROPDOWN_STYLE,
+                        value=_DEFAULT_DAY_VALUE, inline=True,
+                        inputStyle={"marginRight": "3px"},
+                        labelStyle={"marginRight": "12px", "fontSize": "12px",
+                                    "color": "#cbd5e1", "cursor": "pointer"},
                     ),
                 ]),
                 html.Div(id="hour-dropdown-wrap", children=[
@@ -2631,17 +2704,6 @@ app.layout = html.Div(
         _page_section(None, None, html.Div(
             style={"padding": "0 24px 24px 24px"},
             children=[
-                dcc.RadioItems(
-                    id="leaderboard-mode",
-                    options=[
-                        {"label": " Today's Peak",     "value": "now"},
-                        {"label": " Peak This Event",  "value": "peak"},
-                    ],
-                    value="now", inline=True,
-                    inputStyle={"marginRight": "4px"},
-                    labelStyle={"marginRight": "14px", "fontSize": "12px", "color": "#cbd5e1"},
-                    style={"marginBottom": "8px"},
-                ),
                 html.Div(id="leaderboard-panel"),
             ],
         )),
@@ -2937,10 +2999,9 @@ def update_map(var_key, time_idx, unit, selected_station, viewport_width):
     Input("variable-selector", "value"),
     Input("current-time-idx",  "data"),
     Input("unit-selector",     "value"),
-    Input("leaderboard-mode",  "value"),
     Input("selected-station",  "data"),
 )
-def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode, selected_station):
+def update_leaderboard_and_legend(var_key, time_idx, unit, selected_station):
     """
     Split off from update_map: the leaderboard's pattern-matched row IDs
     and the legend don't need field-map.figure's own rebuild-cost concerns
@@ -2961,18 +3022,8 @@ def update_leaderboard_and_legend(var_key, time_idx, unit, leaderboard_mode, sel
     """
     if _GFS_DS is None:
         return html.Div(), html.Div()
-    time_idx = int(time_idx or 0)
-    if leaderboard_mode == "peak":
-        leaderboard = _peak_leaderboard_table(unit, selected_station=selected_station)
-    else:
-        # Day-level label, not the precise instant _et_utc_label gives
-        # elsewhere - the ranking below is now a per-day peak, not tied to
-        # this exact timestamp, so labeling it down to the minute would
-        # overstate the precision of what's actually being shown.
-        day_label = _to_et(_GFS_DS.time.values[time_idx]).strftime("%A, %b %d")
-        leaderboard = _leaderboard_table(time_idx, unit, day_label, selected_station=selected_station)
     legend = _risk_legend()
-    return leaderboard, legend
+    return _corrections_strip(unit, selected_station), legend
 
 
 @app.callback(
@@ -2999,6 +3050,17 @@ def select_station(clickData, current):
         if cdata and isinstance(cdata, str) and cdata.startswith("K"):
             return cdata
     return current
+
+
+@app.callback(
+    Output("selected-station", "data", allow_duplicate=True),
+    Input("station-search", "value"),
+    prevent_initial_call=True,
+)
+def select_station_from_search(value):
+    """Typeahead station picker: the map click and strip rows remain the
+    other two selection paths; clearing the search changes nothing."""
+    return value if value else no_update
 
 
 @app.callback(
@@ -3141,11 +3203,15 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
         _gev_popup(station_id, unit, time_idx),
         _ml_verification_panel(unit),
     ])
+    # Temperature leads: it is the corrected variable, so the chart the
+    # Show radio acts on comes first; Feels Like follows as the heat lens.
     panel_charts = html.Div([
-        dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
         html.Div("Temperature & Dewpoint - closer lines mean higher humidity",
                  style={"fontSize": "11px", "color": "#64748b", "margin": "4px 0 0 4px"}),
         dcc.Graph(figure=fig_temp_dewpoint, config={"displayModeBar": False}),
+        html.Div("Feels Like (Heat Index) - temperature plus humidity load",
+                 style={"fontSize": "11px", "color": "#64748b", "margin": "8px 0 0 4px"}),
+        dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
     ])
     panel_verification = html.Div(verification_children)
     return (panel_headline, panel_analysis, panel_charts, panel_verification,
