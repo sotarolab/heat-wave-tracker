@@ -1550,9 +1550,8 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                 # In the learned view the future line being raw is a
                 # model-scope fact, not a display choice - say so in the
                 # legend instead of leaving it implicit.
-                trace_name = f"{meta['label']} (raw - beyond learned range)"
-                hover = (f"{meta['label']} (raw - beyond the learned model's "
-                         f"validated range): %{{y:.1f}}{unit_label}  "
+                trace_name = f"{meta['label']} (raw - beyond corrected window)"
+                hover = (f"{meta['label']} (raw - beyond the corrected window): %{{y:.1f}}{unit_label}  "
                          f"%{{x|%b %d %I:%M %p}}<extra></extra>")
             else:
                 trace_name = f"{meta['label']} (Forecast, raw)"
@@ -1643,6 +1642,13 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         if (display_mode == "ml" and key == "t2m"
                 and _ML_LINE is not None and station_id in _ML_LINE):
             _mldf = _ML_LINE[station_id]
+            # Display window: the correction is drawn from its init
+            # through now + 24 h. One day ahead is the product promise;
+            # rows may extend further (logged to 36 h for scoring).
+            if now_ts is not None:
+                _mldf = _mldf[_mldf.index.tz_convert(tz) <= now_ts + pd.Timedelta(hours=24)]
+            if _mldf.empty:
+                _mldf = _ML_LINE[station_id]
             _mlx = _mldf.index.tz_convert(tz)
             if _mldf[["lo_c", "hi_c"]].notna().all(axis=None):
                 fig.add_trace(go.Scatter(
@@ -1664,12 +1670,13 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             # and mode by the "before now" segment above.)
             _ahead = _mldf[_mlx > now_ts] if now_ts is not None else _mldf
             _last_ml = _mlx.max()
-            fig.add_annotation(
-                x=_last_ml.tz_convert(tz).isoformat(), y=1.0, yref="paper",
-                text="learned range ends", showarrow=False,
-                font=dict(size=9, color="#a855f7"),
-                xanchor="left", yanchor="top", opacity=0.85,
-            )
+            if now_ts is not None and _last_ml <= now_ts:
+                fig.add_annotation(
+                    x=_last_ml.tz_convert(tz).isoformat(), y=1.0, yref="paper",
+                    text="learned range ends", showarrow=False,
+                    font=dict(size=9, color="#a855f7"),
+                    xanchor="left", yanchor="top", opacity=0.85,
+                )
             for _seg, _op, _nm in ((_past, 0.45, "Learned model (verified)"),
                                    (_ahead, 1.0, "Learned model (ahead)")):
                 if _seg.empty:
@@ -2050,8 +2057,11 @@ def _ml_verification_stats(days: int = 14) -> dict | None:
                      AND p.forecast_valid_time = c.forecast_valid_time
                     WHERE c.forecast_valid_time >= NOW() - INTERVAL '1 day' * %s
                       AND c.offset_baseline_c IS NOT NULL
-                    GROUP BY c.model_version
-                    ORDER BY c.model_version DESC LIMIT 1""", (days,))
+                      -- Pinned to the incumbent: the public record quotes
+                      -- xgb-v1 until the lead-aware candidate (logged in
+                      -- parallel as xgb-v2) graduates on its own scored rows.
+                      AND c.model_version = 'xgb-v1'
+                    GROUP BY c.model_version LIMIT 1""", (days,))
                 row = cur.fetchone()
         finally:
             conn.close()
@@ -2093,14 +2103,21 @@ def _ml_line_data() -> dict[str, pd.DataFrame] | None:
         conn = psycopg2.connect(db_url, connect_timeout=10)
         try:
             with conn.cursor() as cur:
-                cur.execute("""SELECT station_id, forecast_valid_time,
-                                      corrected_value_c, pi_lo_c, pi_hi_c,
-                                      raw_value_c
-                               FROM ml_corrections
-                               WHERE gfs_init_time = %s
-                               ORDER BY station_id, forecast_valid_time""",
-                            (init.to_pydatetime(),))
-                rows = cur.fetchall()
+                rows = []
+                # The chart draws the lead-aware candidate (v2) when its
+                # rows exist for this init, falling back to the incumbent.
+                # The verification panel stays pinned to v1 either way.
+                for _version in ("xgb-v2", "xgb-v1"):
+                    cur.execute("""SELECT station_id, forecast_valid_time,
+                                          corrected_value_c, pi_lo_c, pi_hi_c,
+                                          raw_value_c
+                                   FROM ml_corrections
+                                   WHERE gfs_init_time = %s AND model_version = %s
+                                   ORDER BY station_id, forecast_valid_time""",
+                                (init.to_pydatetime(), _version))
+                    rows = cur.fetchall()
+                    if rows:
+                        break
         finally:
             conn.close()
         if not rows:
@@ -2784,7 +2801,7 @@ app.layout = html.Div(
                                     options=[
                                         {"label": " Bias-Corrected", "value": "corrected"},
                                         {"label": " Raw Forecast",   "value": "raw"},
-                                        {"label": " Learned Model (first 8h)", "value": "ml"},
+                                        {"label": " Learned Model (next 24h)", "value": "ml"},
                                     ],
                                     value="corrected", inline=True,
                                     inputStyle={"marginRight": "4px"},
