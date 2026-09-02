@@ -1658,7 +1658,7 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                     fill="toself", fillcolor="rgba(168,85,247,0.14)",
                     mode="none",  # few vertices: plotly's auto mode would draw markers
                     line=dict(width=0), hoverinfo="skip", showlegend=True,
-                    name="95% band (learned)",
+                    name="80% band (learned)",
                 ))
             # Split at "now": what already verified vs what is still a
             # forecast. Most of the validated window is usually behind
@@ -1702,6 +1702,15 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
                     hovertemplate=f"{meta['label']} (Observed): %{{y:.1f}}{unit_label}  "
                                   f"%{{x|%b %d %I:%M %p}}<extra></extra>",
                 ))
+
+    # Learned view: focus the time axis on the model's window - half a
+    # day of context behind the drawn segment through a few hours past
+    # its end - instead of the full 3-day obs history plus 5-day
+    # forecast, most of which that view does not speak to.
+    if display_mode == "ml" and _ML_LINE is not None and station_id in _ML_LINE and now_ts is not None:
+        _win = _ML_LINE[station_id].index.tz_convert(tz)
+        fig.update_xaxes(range=[(_win.min() - pd.Timedelta(hours=12)).isoformat(),
+                                (now_ts + pd.Timedelta(hours=30)).isoformat()])
 
     # "Now" cursor - the real observed/forecast boundary, not the day/time
     # picked in the Day/Time dropdowns (that's shown in the title instead).

@@ -80,7 +80,8 @@ def _log_one_version(ds, version: str, vcfg: dict) -> None:
         corr = model.predict(X)
         if interval is not None:
             qlo_m, qhi_m, margin = interval
-            lo, hi = correction.apply_margin(qlo_m.predict(X), qhi_m.predict(X), margin)
+            per_row = np.array([correction.margin_for_lead(margin, l) for l in X.lead_h])
+            lo, hi = correction.apply_margin(qlo_m.predict(X), qhi_m.predict(X), per_row)
         else:
             lo = hi = np.full(len(X), np.nan)
         base = offset.get(stn["id"])
