@@ -1099,8 +1099,8 @@ def _corrections_strip(unit: str, selected_station: str | None = None,
     children = [html.H3("Largest model corrections - latest cycle",
                         style={"fontSize": "15px", "color": "#f8fafc",
                                "margin": "0 0 2px 0"}),
-                html.Div("Stations where the learned correction is moving the "
-                         "current forecast most. Click a row to open that station.",
+                html.Div("Stations with the largest ML corrections this cycle. "
+                         "Click to view.",
                          style={"fontSize": "11px", "color": "#64748b",
                                 "marginBottom": "8px"})]
     for rank, (sid, delta) in enumerate(rows[:top_n], 1):
