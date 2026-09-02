@@ -1546,9 +1546,18 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         if show_raw:
             best_series = line_series
             pi95_c = None
-            trace_name = f"{meta['label']} (Forecast, raw)"
-            hover = (f"{meta['label']} (Forecast, raw - not bias-corrected): "
-                     f"%{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>")
+            if display_mode == "ml" and key == "t2m":
+                # In the learned view the future line being raw is a
+                # model-scope fact, not a display choice - say so in the
+                # legend instead of leaving it implicit.
+                trace_name = f"{meta['label']} (raw - beyond learned range)"
+                hover = (f"{meta['label']} (raw - beyond the learned model's "
+                         f"validated range): %{{y:.1f}}{unit_label}  "
+                         f"%{{x|%b %d %I:%M %p}}<extra></extra>")
+            else:
+                trace_name = f"{meta['label']} (Forecast, raw)"
+                hover = (f"{meta['label']} (Forecast, raw - not bias-corrected): "
+                         f"%{{y:.1f}}{unit_label}  %{{x|%b %d %I:%M %p}}<extra></extra>")
         elif bias_result is not None:
             bias_c  = bias_result["bias"]
             pi95_c  = bias_result["pi95_halfwidth"]
@@ -1654,6 +1663,13 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
             # (The raw forecast over this window is drawn for every metric
             # and mode by the "before now" segment above.)
             _ahead = _mldf[_mlx > now_ts] if now_ts is not None else _mldf
+            _last_ml = _mlx.max()
+            fig.add_annotation(
+                x=_last_ml.tz_convert(tz).isoformat(), y=1.0, yref="paper",
+                text="learned range ends", showarrow=False,
+                font=dict(size=9, color="#a855f7"),
+                xanchor="left", yanchor="top", opacity=0.85,
+            )
             for _seg, _op, _nm in ((_past, 0.45, "Learned model (verified)"),
                                    (_ahead, 1.0, "Learned model (ahead)")):
                 if _seg.empty:
