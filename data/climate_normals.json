@@ -961,9 +961,9 @@
  "KGEG": {
   "period_label": "Today",
   "date": "September 2 2026",
-  "high_actual_f": 70,
+  "high_actual_f": 71,
   "high_normal_f": 79,
-  "high_departure_f": -9
+  "high_departure_f": -8
  },
  "KYKM": {
   "period_label": "Today",
