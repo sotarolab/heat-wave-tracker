@@ -1642,11 +1642,13 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
         if (display_mode == "ml" and key == "t2m"
                 and _ML_LINE is not None and station_id in _ML_LINE):
             _mldf = _ML_LINE[station_id]
-            # Display window: the correction is drawn from its init
-            # through now + 24 h. One day ahead is the product promise;
-            # rows may extend further (logged to 36 h for scoring).
+            # Display window: one day of verified context behind now,
+            # two days of corrected forecast ahead; rows are logged to
+            # 60 h of lead so the 48 h promise holds at any time of day.
             if now_ts is not None:
-                _mldf = _mldf[_mldf.index.tz_convert(tz) <= now_ts + pd.Timedelta(hours=24)]
+                _idx_loc = _mldf.index.tz_convert(tz)
+                _mldf = _mldf[(_idx_loc >= now_ts - pd.Timedelta(hours=24))
+                              & (_idx_loc <= now_ts + pd.Timedelta(hours=48))]
             if _mldf.empty:
                 _mldf = _ML_LINE[station_id]
             _mlx = _mldf.index.tz_convert(tz)
@@ -1708,9 +1710,8 @@ def _build_station_figure(station_id: str, asos_df: pd.DataFrame,
     # its end - instead of the full 3-day obs history plus 5-day
     # forecast, most of which that view does not speak to.
     if display_mode == "ml" and _ML_LINE is not None and station_id in _ML_LINE and now_ts is not None:
-        _win = _ML_LINE[station_id].index.tz_convert(tz)
-        fig.update_xaxes(range=[(_win.min() - pd.Timedelta(hours=12)).isoformat(),
-                                (now_ts + pd.Timedelta(hours=30)).isoformat()])
+        fig.update_xaxes(range=[(now_ts - pd.Timedelta(hours=26)).isoformat(),
+                                (now_ts + pd.Timedelta(hours=50)).isoformat()])
 
     # "Now" cursor - the real observed/forecast boundary, not the day/time
     # picked in the Day/Time dropdowns (that's shown in the title instead).
@@ -2810,7 +2811,7 @@ app.layout = html.Div(
                                     options=[
                                         {"label": " Bias-Corrected", "value": "corrected"},
                                         {"label": " Raw Forecast",   "value": "raw"},
-                                        {"label": " Learned Model (next 24h)", "value": "ml"},
+                                        {"label": " Learned Model (next 48h)", "value": "ml"},
                                     ],
                                     value="corrected", inline=True,
                                     inputStyle={"marginRight": "4px"},
