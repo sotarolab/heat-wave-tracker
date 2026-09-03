@@ -46,7 +46,7 @@ MODEL_NAME = "t2m_correction"
 # own scored record without touching the incumbent's.
 VERSIONS = {
     "xgb-v1": {"validated_lead_h": 8.0,   "log_lead_h": 8.0},
-    "xgb-v2": {"validated_lead_h": 120.0, "log_lead_h": 36.0},
+    "xgb-v2": {"validated_lead_h": 120.0, "log_lead_h": 60.0},
 }
 MODEL_VERSION = "xgb-v1"          # default/incumbent
 VALIDATED_LEAD_H = 8.0            # incumbent's scope (back-compat)

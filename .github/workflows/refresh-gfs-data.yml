@@ -65,7 +65,7 @@ jobs:
         env:
           NEON_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
         run: |
-          pip install --quiet xgboost
+          pip install --quiet xgboost scikit-learn
           python scripts/log_corrections.py
 
       - name: Commit and push if data changed
