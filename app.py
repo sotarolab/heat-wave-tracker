@@ -3722,11 +3722,9 @@ def ask_assistant(_n, _submit, _example_clicks, _reset, question, unit, history)
         return no_update, no_update, no_update, no_update, no_update
     err = lambda msg: (html.Div(msg, style={"fontSize": "12px", "color": "#f87171"}), shown,
                        question, history or [], no_update)
-    if _assistant.spend_exhausted():
-        return err("Sol has used its budget for today. Try again tomorrow.")
     fwd = request.headers.get("x-forwarded-for", "")
     key = fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
-    reason = _assistant.check_rate_limit(key)
+    reason = _assistant.check_rate_limit(key) or _assistant.reserve_question()
     if reason:
         return err(reason)
     try:

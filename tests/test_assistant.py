@@ -112,3 +112,16 @@ class TestHistory:
     def test_empty_and_blank_pairs_skipped(self):
         assert assistant.history_messages(None) == []
         assert assistant.history_messages([["", "a"], ["q", "  "]]) == []
+
+
+class TestScopeAndBudgetFallback:
+    def test_reserve_without_db_uses_memory_tally(self, monkeypatch):
+        monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 10)
+        assistant._spend.update({"day": "d9", "tokens": 0})
+        assert assistant.reserve_question(day="d9") is None
+        assistant.record_spend({"input_tokens": 10}, now_day="d9")
+        assert assistant.reserve_question(day="d9") == "budget spent"
+
+    def test_off_topic_reply_is_fixed_text(self):
+        assert "heat forecast" in assistant.OFF_TOPIC_REPLY
