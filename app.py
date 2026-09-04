@@ -3227,12 +3227,12 @@ app.layout = html.Div(
             ]),
             html.Div("Answers only from this site's forecast, its learned correction, and its "
                      "verification record. Heat safety guidance is quoted from the NWS.",
-                     style={"fontSize": "10px", "color": "#64748b", "marginBottom": "8px"}),
+                     style={"fontSize": "12px", "color": "#64748b", "marginBottom": "8px"}),
             html.Div(id="assistant-answer", style={"display": "none"}),
             html.Div(style={"display": "flex", "gap": "6px", "marginTop": "8px"}, children=[
                 dcc.Input(id="assistant-input", type="text", maxLength=500, debounce=True,
-                          placeholder="Where is it hottest right now?",
-                          style={"flex": "1", "fontSize": "13px", "padding": "8px 10px",
+                          placeholder="Ask about the forecast...",
+                          style={"flex": "1", "fontSize": "14px", "padding": "9px 11px",
                                  "borderRadius": "6px", "border": "1px solid #334155",
                                  "backgroundColor": "#0f172a", "color": "#e2e8f0"}),
                 html.Button("Ask", id="assistant-send", n_clicks=0,
@@ -3241,12 +3241,13 @@ app.layout = html.Div(
                                    "color": "white", "cursor": "pointer"}),
             ]),
             *[html.Div([
-                html.Div(label, style={"fontSize": "10px", "color": "#64748b", "margin": "8px 0 3px"}),
-                html.Div(style={"display": "flex", "gap": "5px", "flexWrap": "wrap"},
+                html.Div(label, style={"fontSize": "12px", "color": "#94a3b8", "margin": "10px 0 4px",
+                                       "fontWeight": "600"}),
+                html.Div(style={"display": "flex", "gap": "6px", "flexWrap": "wrap"},
                          children=[html.Button(q, id={"type": "assistant-example",
                                                       "index": _ASSISTANT_EXAMPLES.index(q)}, n_clicks=0,
-                                               style={"fontSize": "10px", "padding": "3px 8px",
-                                                      "borderRadius": "10px", "border": "1px solid #334155",
+                                               style={"fontSize": "13px", "padding": "6px 12px",
+                                                      "borderRadius": "14px", "border": "1px solid #334155",
                                                       "backgroundColor": "#1e293b", "color": "#cbd5e1",
                                                       "cursor": "pointer"})
                                    for q in chips]),
