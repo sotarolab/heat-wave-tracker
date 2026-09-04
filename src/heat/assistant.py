@@ -73,7 +73,9 @@ guidance, and point to weather.gov/heat.
 ## Style
 
 Answer in the language the question was asked in. Be brief and concrete. Temperatures in the unit
-the user uses, Fahrenheit by default. No preamble."""
+the user uses, Fahrenheit by default. No preamble. Plain sentences and short bullet lists only:
+never write markdown tables or headings in the text, because tables are rendered by show_table
+and the text is shown as prose. Name the station and its ICAO code once."""
 
 
 # ── provider contract ────────────────────────────────────────────────────────

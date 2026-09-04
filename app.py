@@ -2716,9 +2716,11 @@ print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'
 
 def _render_assistant(result: dict, unit: str) -> list:
     """Turn {answer, renders, tools_used} into Dash children."""
-    children = [html.Div(result["answer"], style={"fontSize": "13px", "color": "#e2e8f0",
-                                                  "whiteSpace": "pre-wrap", "lineHeight": "1.5",
-                                                  "marginBottom": "8px"})]
+    # dcc.Markdown renders the light formatting the model uses (bold,
+    # bullets) and sanitizes HTML by default; the text is model output and
+    # is never trusted as markup.
+    children = [dcc.Markdown(result["answer"], style={"fontSize": "13px", "color": "#e2e8f0",
+                                                      "lineHeight": "1.5", "marginBottom": "8px"})]
     for r in result.get("renders", []):
         if r["kind"] == "table":
             children.append(html.Div(r["title"], style={"fontSize": "12px", "fontWeight": "600",
@@ -3536,14 +3538,6 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
 
 # ── entry point ───────────────────────────────────────────────────────────────
 
-if __name__ == "__main__":
-    if _GFS_DS is None:
-        print(
-            "\nNo GFS data found. Pre-fetch it first:\n"
-            "    python scripts/fetch_gfs_conus.py\n"
-        )
-    app.run(debug=True, host="0.0.0.0", port=8051)
-
 
 @app.callback(
     Output("assistant-answer", "children"),
@@ -3587,3 +3581,12 @@ def ask_assistant(_n, _submit, _example_clicks, question, unit):
         return html.Div("The assistant is unavailable right now.",
                         style={"fontSize": "12px", "color": "#f87171"}), shown, question
     return _render_assistant(result, unit or "F"), shown, question
+
+
+if __name__ == "__main__":
+    if _GFS_DS is None:
+        print(
+            "\nNo GFS data found. Pre-fetch it first:\n"
+            "    python scripts/fetch_gfs_conus.py\n"
+        )
+    app.run(debug=True, host="0.0.0.0", port=8051)
