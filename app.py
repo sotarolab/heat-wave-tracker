@@ -3225,8 +3225,9 @@ app.layout = html.Div(
                                        "color": "#cbd5e1", "cursor": "pointer"}),
                 ]),
             ]),
-            html.Div("Answers only from this site's forecast, its learned correction, and its "
-                     "verification record. Heat safety guidance is quoted from the NWS.",
+            html.Div("I will answer only using data from this site's forecast, its learned "
+                     "correction, and the verification record. Please follow heat safety "
+                     "guidelines from your local NWS office.",
                      style={"fontSize": "12px", "color": "#64748b", "marginBottom": "8px"}),
             html.Div(id="assistant-answer", style={"display": "none"}),
             html.Div(style={"display": "flex", "gap": "6px", "marginTop": "8px"}, children=[
