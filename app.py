@@ -75,6 +75,7 @@ from src.heat.gfs_conus import load_or_fetch, DEFAULT_OUT
 from src.heat.stations  import MAJOR_CONUS_STATIONS, get_station
 from src.heat.asos      import fetch_station_obs
 from src.heat.compute   import heat_index_array
+from src.heat          import assistant as _assistant
 from src.heat.bias      import (today_forecast_bias, brier_score_exceedance,
                                 BIAS_MIN_PAIRS, BIAS_MATCH_TOLERANCE)
 from src.heat.extremes  import (fit_gev, return_level, return_period, support,
@@ -2572,6 +2573,195 @@ def _overnight_and_streak_panel(station_id: str) -> html.Div:
              "borderTop": "1px solid #334155", "marginTop": "4px"})
 
 
+# ── assistant: data provider and renderer ────────────────────────────────────
+# The assistant (src/heat/assistant.py) answers only from these functions.
+# Each returns plain JSON-serializable data in degrees F with station-local
+# times; the model does the wording, the app does the drawing.
+
+def _asst_find_stations(query: str) -> list[dict]:
+    q = (query or "").strip().lower()
+    out = []
+    for st in MAJOR_CONUS_STATIONS:
+        hay = f"{st['id']} {st['name']} {st['state']}".lower()
+        if q and (q in hay or q == st["state"].lower()):
+            out.append({"station_id": st["id"], "name": st["name"], "state": st["state"]})
+    return out[:12]
+
+
+def _asst_station_forecast(station_id: str, hours_ahead: int = 48) -> dict:
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None:
+        return {"error": f"unknown station {station_id}"}
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    t = _GFS_DS["t2m"].sel(**sel).to_series(); hi = _GFS_DS["hi"].sel(**sel).to_series()
+    idx = pd.DatetimeIndex(t.index).tz_localize("UTC").tz_convert(tz)
+    now = pd.Timestamp.now(tz=tz)
+    ml = _ML_LINE.get(station_id) if _ML_LINE else None
+    rows = []
+    for ts, tv, hv in zip(idx, t.values, hi.values):
+        if ts < now - pd.Timedelta(hours=2) or ts > now + pd.Timedelta(hours=hours_ahead):
+            continue
+        row = {"time_local": ts.strftime("%a %b %d %I:%M %p"),
+               "raw_temp_f": round(tv * 9 / 5 + 32, 1),
+               "raw_heat_index_f": round(hv * 9 / 5 + 32, 1)}
+        if ml is not None:
+            key = ts.tz_convert("UTC")
+            if key in ml.index:
+                r = ml.loc[key]
+                row["corrected_temp_f"] = round(r.ml_c * 9 / 5 + 32, 1)
+                if pd.notna(r.lo_c):
+                    row["band80_f"] = [round(r.lo_c * 9 / 5 + 32, 1), round(r.hi_c * 9 / 5 + 32, 1)]
+        rows.append(row)
+    latest = None
+    try:
+        obs = fetch_station_obs(station_id, hours=6)
+        if not obs.empty:
+            last = obs.dropna(subset=["temp_c"]).iloc[-1]
+            latest = {"time_local": last.valid_utc.tz_convert(tz).strftime("%a %b %d %I:%M %p"),
+                      "temp_f": round(last.temp_c * 9 / 5 + 32, 1)}
+    except Exception:
+        pass
+    return {"station_id": station_id, "name": stn["name"], "state": stn["state"],
+            "gfs_init_utc": str(_GFS_DS.attrs.get("gfs_init")),
+            "corrected_available": ml is not None,
+            "note": "corrected_temp_f is the learned model (v2) forecast; band80_f is its 80% interval",
+            "latest_observation": latest, "hours": rows}
+
+
+def _asst_hottest(day: str = "today", limit: int = 10) -> dict:
+    peaks = _get_station_daily_peaks("hi")
+    if not peaks:
+        return {"error": "no forecast loaded"}
+    days = [d for d, _ in peaks]
+    today = _now_et().date()
+    want = (today if day in ("", "today")
+            else today + pd.Timedelta(days=1) if day == "tomorrow" else None)
+    if want is None:
+        try:
+            want = pd.Timestamp(day).date()
+        except Exception:
+            return {"error": f"unrecognized day {day}", "available_days": [str(d) for d in days]}
+    match = [rows for d, rows in peaks if d == want]
+    if not match:
+        return {"error": f"no forecast for {want}", "available_days": [str(d) for d in days]}
+    out = []
+    for st, peak_c, idx in match[0][:limit]:
+        out.append({"station_id": st["id"], "name": st["name"], "state": st["state"],
+                    "peak_heat_index_f": round(peak_c * 9 / 5 + 32, 1),
+                    "peak_time_et": _to_et(_GFS_DS.time.values[idx]).strftime("%I:%M %p %Z"),
+                    "category": _heat_index_category(peak_c)})
+    return {"day": str(want), "metric": "peak heat index (feels like)", "stations": out}
+
+
+def _asst_streak(station_id: str) -> dict:
+    stn = get_station(station_id)
+    if stn is None:
+        return {"error": f"unknown station {station_id}"}
+    st = _heat_streak(station_id)
+    if st is None:
+        return {"station_id": station_id, "name": stn["name"], "streak_days": 0,
+                "note": "today's peak is below Caution at this station"}
+    return {"station_id": station_id, "name": stn["name"], **st,
+            "note": "consecutive forecast days at or above today's NWS category, counted forward"}
+
+
+def _asst_breaks(station_id: str) -> dict:
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None:
+        return {"error": f"unknown station {station_id}"}
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    hi = _GFS_DS["hi"].sel(**sel).to_series()
+    idx = pd.DatetimeIndex(hi.index).tz_localize("UTC").tz_convert(tz)
+    daily = []
+    for d in sorted(set(idx.date)):
+        v = float(hi[idx.date == d].max())
+        daily.append({"date": str(d), "peak_heat_index_f": round(v * 9 / 5 + 32, 1),
+                      "category": _heat_index_category(v)})
+    first = next((d["date"] for d in daily if d["peak_heat_index_f"] < 90.0), None)
+    return {"station_id": station_id, "name": stn["name"], "threshold_f": 90.0,
+            "first_day_below_extreme_caution": first, "daily_peaks": daily,
+            "note": "raw GFS heat index; the learned correction applies to temperature only"}
+
+
+def _asst_verification() -> dict:
+    v = _ML_VERIF
+    if not v:
+        return {"error": "no scored rows yet"}
+    return {"model_version": v["version"], "scored_station_hours": v["n"],
+            "window": f"{v['start']:%b %d} to {v['end']:%b %d}",
+            "rmse_f": {"raw_gfs": round(v["rmse_raw"] * 9 / 5, 2),
+                       "per_station_offset_baseline": round(v["rmse_offset"] * 9 / 5, 2),
+                       "learned_correction": round(v["rmse_ml"] * 9 / 5, 2)},
+            "band95_observed_coverage": v.get("band_coverage"),
+            "note": "scored live against observations that arrived after training; leads <= 8 h"}
+
+
+def _asst_safety() -> dict:
+    return {"source": "NWS heat index chart, https://www.weather.gov/safety/heat-index",
+            "categories": [{"min_heat_index_f": f, "category": label,
+                            "description": RISK_DESCRIPTIONS.get(label, "")}
+                           for f, label, _ in RISK_CATEGORIES_F],
+            "below_first_threshold": RISK_DESCRIPTIONS[NO_RISK_LABEL]}
+
+
+_assistant.configure(_assistant.Provider(
+    find_stations=_asst_find_stations, station_forecast=_asst_station_forecast,
+    hottest_stations=_asst_hottest, heat_streak=_asst_streak, when_it_breaks=_asst_breaks,
+    verification=_asst_verification, safety_table=_asst_safety))
+_ASSISTANT_ON = _assistant.available()
+print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
+
+
+def _render_assistant(result: dict, unit: str) -> list:
+    """Turn {answer, renders, tools_used} into Dash children."""
+    children = [html.Div(result["answer"], style={"fontSize": "13px", "color": "#e2e8f0",
+                                                  "whiteSpace": "pre-wrap", "lineHeight": "1.5",
+                                                  "marginBottom": "8px"})]
+    for r in result.get("renders", []):
+        if r["kind"] == "table":
+            children.append(html.Div(r["title"], style={"fontSize": "12px", "fontWeight": "600",
+                                                        "color": "#f8fafc", "margin": "6px 0 2px"}))
+            children.append(html.Table(
+                [html.Thead(html.Tr([html.Th(c, style={"textAlign": "left", "padding": "3px 8px",
+                                                       "color": "#94a3b8", "fontSize": "11px"})
+                                     for c in r["columns"]]))] +
+                [html.Tbody([html.Tr([html.Td(c, style={"padding": "3px 8px", "fontSize": "12px",
+                                                        "borderTop": "1px solid #1e293b"})
+                                      for c in row]) for row in r["rows"]])],
+                style={"borderCollapse": "collapse", "marginBottom": "8px"}))
+        elif r["kind"] == "chart":
+            fig = go.Figure()
+            for srs in r["series"]:
+                if r.get("chart_type") == "bar":
+                    fig.add_trace(go.Bar(x=r["x"], y=srs["y"], name=srs["name"]))
+                else:
+                    fig.add_trace(go.Scatter(x=r["x"], y=srs["y"], mode="lines+markers",
+                                             name=srs["name"]))
+            fig.update_layout(title=dict(text=r["title"], font=dict(size=12, color="#e2e8f0")),
+                              paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG, height=280,
+                              margin=dict(l=40, r=10, t=36, b=40), font=dict(color=_PANEL_FONT),
+                              yaxis=dict(title=r.get("y_label", ""), gridcolor=_PANEL_GRID),
+                              xaxis=dict(gridcolor=_PANEL_GRID),
+                              legend=dict(orientation="h", y=-0.25))
+            children.append(dcc.Graph(figure=fig, config={"displayModeBar": False}))
+        elif r["kind"] == "station_chart":
+            sid = r["station_id"]
+            if get_station(sid) is not None:
+                try:
+                    obs = fetch_station_obs(sid, hours=72)
+                except Exception:
+                    obs = pd.DataFrame()
+                fig, _ = _build_station_figure(sid, obs, 0, unit=unit, metrics=["t2m"],
+                                               display_mode="ml")
+                children.append(dcc.Graph(figure=fig, config={"displayModeBar": False}))
+    if result.get("tools_used"):
+        children.append(html.Div("sources: " + " · ".join(dict.fromkeys(result["tools_used"])),
+                                 style={"fontSize": "10px", "color": "#64748b", "marginTop": "4px"}))
+    return children
+
+
 # ── Dash app ──────────────────────────────────────────────────────────────────
 
 app    = Dash(__name__)
@@ -2841,6 +3031,55 @@ app.layout = html.Div(
                 ),
                 html.Div(id="station-panel-charts"),
                 html.Div(id="station-panel-analysis"),
+            ],
+        )),
+
+        # ── ask the model ────────────────────────────────────────────────────
+        # Hidden entirely when the assistant has no credentials: the page
+        # must look exactly as it did before this existed on a deployment
+        # without a key, rather than show a control that fails when pressed.
+        _page_section(None, None, html.Div(
+            id="assistant-section",
+            style={"padding": "0 24px 24px 24px",
+                   "display": "block" if _ASSISTANT_ON else "none"},
+            children=[
+                html.Div("Ask about the forecast",
+                         style={"fontSize": "15px", "fontWeight": "700", "color": "#f8fafc",
+                                "marginBottom": "2px"}),
+                html.Div("Answers come only from this site's forecast, its learned correction, "
+                         "and its verification record. Charts and tables are drawn from the same "
+                         "numbers. Heat safety guidance is quoted from the National Weather Service.",
+                         style={"fontSize": "11px", "color": "#64748b", "marginBottom": "8px",
+                                "maxWidth": "760px"}),
+                html.Div(style={"display": "flex", "gap": "8px", "maxWidth": "760px"}, children=[
+                    dcc.Input(id="assistant-input", type="text", maxLength=500, debounce=True,
+                              placeholder="Where is it hottest tomorrow? What will Denver be at 5 PM?",
+                              style={"flex": "1", "fontSize": "13px", "padding": "8px 10px",
+                                     "borderRadius": "6px", "border": "1px solid #334155",
+                                     "backgroundColor": "#0f172a", "color": "#e2e8f0"}),
+                    html.Button("Ask", id="assistant-send", n_clicks=0,
+                                style={"fontSize": "13px", "padding": "8px 16px", "borderRadius": "6px",
+                                       "border": "1px solid #7c3aed", "backgroundColor": "#6d28d9",
+                                       "color": "white", "cursor": "pointer"}),
+                ]),
+                html.Div(style={"display": "flex", "gap": "6px", "flexWrap": "wrap", "marginTop": "6px"},
+                         children=[html.Button(q, id={"type": "assistant-example", "index": i}, n_clicks=0,
+                                               style={"fontSize": "11px", "padding": "4px 10px",
+                                                      "borderRadius": "12px", "border": "1px solid #334155",
+                                                      "backgroundColor": "#1e293b", "color": "#cbd5e1",
+                                                      "cursor": "pointer"})
+                                   for i, q in enumerate([
+                                       "Where is it hottest right now?",
+                                       "How hot will it get in Washington DC tomorrow, and when?",
+                                       "How many more days does the heat last in Omaha?",
+                                       "How accurate has the corrected forecast been?",
+                                       "Is it safe to run outside in Phoenix this afternoon?"])]),
+                dcc.Loading(html.Div(id="assistant-answer",
+                                     style={"marginTop": "10px", "maxWidth": "860px",
+                                            "backgroundColor": "#1e293b", "borderRadius": "8px",
+                                            "padding": "10px 12px", "border": "1px solid #334155",
+                                            "display": "none"}),
+                            type="dot", color="#a855f7"),
             ],
         )),
 
@@ -3304,3 +3543,47 @@ if __name__ == "__main__":
             "    python scripts/fetch_gfs_conus.py\n"
         )
     app.run(debug=True, host="0.0.0.0", port=8051)
+
+
+@app.callback(
+    Output("assistant-answer", "children"),
+    Output("assistant-answer", "style"),
+    Output("assistant-input", "value"),
+    Input("assistant-send", "n_clicks"),
+    Input("assistant-input", "n_submit"),
+    Input({"type": "assistant-example", "index": ALL}, "n_clicks"),
+    State("assistant-input", "value"),
+    State("unit-selector", "value"),
+    prevent_initial_call=True,
+)
+def ask_assistant(_n, _submit, _example_clicks, question, unit):
+    """One question, one grounded answer. Example chips fill the question
+    and ask it; the Enter key and the button ask what was typed."""
+    from flask import request
+    triggered = ctx.triggered_id
+    if isinstance(triggered, dict) and triggered.get("type") == "assistant-example":
+        if not (ctx.triggered and ctx.triggered[0]["value"]):
+            return no_update, no_update, no_update
+        examples = ["Where is it hottest right now?",
+                    "How hot will it get in Washington DC tomorrow, and when?",
+                    "How many more days does the heat last in Omaha?",
+                    "How accurate has the corrected forecast been?",
+                    "Is it safe to run outside in Phoenix this afternoon?"]
+        question = examples[triggered["index"]]
+    if not question or not question.strip():
+        return no_update, no_update, no_update
+    shown = {"marginTop": "10px", "maxWidth": "860px", "backgroundColor": "#1e293b",
+             "borderRadius": "8px", "padding": "10px 12px", "border": "1px solid #334155",
+             "display": "block"}
+    fwd = request.headers.get("x-forwarded-for", "")
+    key = fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
+    reason = _assistant.check_rate_limit(key)
+    if reason:
+        return html.Div(reason, style={"fontSize": "12px", "color": "#f87171"}), shown, question
+    try:
+        result = _assistant.ask(question.strip())
+    except Exception as exc:
+        print(f"[assistant] failed: {exc}")
+        return html.Div("The assistant is unavailable right now.",
+                        style={"fontSize": "12px", "color": "#f87171"}), shown, question
+    return _render_assistant(result, unit or "F"), shown, question

@@ -16,3 +16,4 @@ gunicorn
 tzdata
 pyarrow
 psycopg2-binary
+anthropic>=1.3,<2
