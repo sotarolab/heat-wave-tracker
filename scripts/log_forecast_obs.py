@@ -74,15 +74,38 @@ def _paired_recent(forecast_series: pd.Series, obs_df: pd.DataFrame,
                          tolerance=MATCH_TOLERANCE).dropna(subset=["observed"])
 
 
-def _collect_pairs(ds, gfs_init: pd.Timestamp) -> list[tuple]:
+EXTRA_COLS = ["wind_spd_kt", "wind_gust_kt", "wind_dir_deg", "sky_cover", "ceiling_ft",
+              "pressure_hpa", "visibility_mi", "wx_codes"]
+
+
+def _extra_rows(station_id: str, obs_df: pd.DataFrame) -> list[tuple]:
+    """Observed regime variables per observation, for station_obs_extra.
+    Same fetch as the pairs, so this adds no IEM load."""
+    out = []
+    for r in obs_df.itertuples(index=False):
+        vals = []
+        for c in EXTRA_COLS:
+            v = getattr(r, c, None)
+            if c != "wx_codes":
+                v = None if v is None or (isinstance(v, float) and v != v) else float(v)
+            out_v = v
+            vals.append(out_v)
+        out.append((station_id, r.valid_utc.to_pydatetime(), *vals))
+    return out
+
+
+def _collect_pairs(ds, gfs_init: pd.Timestamp) -> tuple[list[tuple], list[tuple]]:
     """One row per (station, metric, matched timestep) across every major
-    station, ready for a bulk insert."""
+    station, ready for a bulk insert, plus the observed regime variables
+    from the same fetch."""
     rows: list[tuple] = []
+    extra: list[tuple] = []
     for station in MAJOR_CONUS_STATIONS:
         station_id = station["id"]
         obs_df = fetch_station_obs(station_id, hours=ASOS_HOURS)
         if obs_df.empty:
             continue
+        extra.extend(_extra_rows(station_id, obs_df))
 
         # Real observed Feels Like, computed from actual observed temp+dewpoint
         # with the same NWS formula the forecast side uses - a validated fact
@@ -110,7 +133,7 @@ def _collect_pairs(ds, gfs_init: pd.Timestamp) -> list[tuple]:
                     float(row.forecast), float(row.observed),
                     gfs_init.to_pydatetime(),
                 ))
-    return rows
+    return rows, extra
 
 
 def main() -> None:
@@ -126,26 +149,55 @@ def main() -> None:
     gfs_init = pd.Timestamp(ds.attrs.get("gfs_init"))
 
     print("[log_forecast_obs] Collecting pairs across all stations ...")
-    rows = _collect_pairs(ds, gfs_init)
-    print(f"[log_forecast_obs] {len(rows)} candidate pairs collected")
-    if not rows:
+    rows, extra = _collect_pairs(ds, gfs_init)
+    print(f"[log_forecast_obs] {len(rows)} candidate pairs, {len(extra)} observation rows collected")
+    if not rows and not extra:
         return
 
     conn = psycopg2.connect(db_url)
     try:
         with conn, conn.cursor() as cur:
-            psycopg2.extras.execute_values(
-                cur,
-                """
-                INSERT INTO forecast_obs_pairs
-                    (station_id, metric, forecast_valid_time,
-                     forecast_value_c, observed_value_c, gfs_init_time)
-                VALUES %s
-                ON CONFLICT (station_id, metric, forecast_valid_time) DO NOTHING
-                """,
-                rows,
-            )
-            print(f"[log_forecast_obs] Upserted (new rows: {cur.rowcount})")
+            if rows:
+                inserted = psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO forecast_obs_pairs
+                        (station_id, metric, forecast_valid_time,
+                         forecast_value_c, observed_value_c, gfs_init_time)
+                    VALUES %s
+                    ON CONFLICT (station_id, metric, forecast_valid_time) DO NOTHING
+                    RETURNING 1
+                    """,
+                    rows, fetch=True,
+                )
+                print(f"[log_forecast_obs] pairs inserted (new rows: {len(inserted)})")
+            # Observed regime variables. Separate table: these are
+            # observations with no forecast counterpart, keyed by station and
+            # observation time; idempotent like the pairs.
+            cur.execute("""
+                CREATE TABLE IF NOT EXISTS station_obs_extra (
+                    station_id    text NOT NULL,
+                    valid_utc     timestamptz NOT NULL,
+                    wind_spd_kt   real, wind_gust_kt real, wind_dir_deg real,
+                    sky_cover     real, ceiling_ft   real,
+                    pressure_hpa  real, visibility_mi real,
+                    wx_codes      text,
+                    PRIMARY KEY (station_id, valid_utc)
+                )""")
+            if extra:
+                inserted = psycopg2.extras.execute_values(
+                    cur,
+                    """
+                    INSERT INTO station_obs_extra
+                        (station_id, valid_utc, wind_spd_kt, wind_gust_kt, wind_dir_deg,
+                         sky_cover, ceiling_ft, pressure_hpa, visibility_mi, wx_codes)
+                    VALUES %s
+                    ON CONFLICT (station_id, valid_utc) DO NOTHING
+                    RETURNING 1
+                    """,
+                    extra, fetch=True,
+                )
+                print(f"[log_forecast_obs] observation rows inserted (new rows: {len(inserted)})")
     finally:
         conn.close()
 
