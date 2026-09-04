@@ -100,3 +100,15 @@ class TestSpendBudget:
         assistant.record_spend({"cache_read_input_tokens": 900}, now_day="d1")
         assert assistant._spend["tokens"] == 90
         assert assistant.spend_exhausted(now_day="d1") is False
+
+
+class TestHistory:
+    def test_last_n_exchanges_as_turns(self):
+        hist = [["q1", "a1"], ["q2", "a2"], ["q3", "a3"], ["q4", "a4"]]
+        msgs = assistant.history_messages(hist)
+        assert [m["role"] for m in msgs] == ["user", "assistant"] * assistant.HISTORY_TURNS
+        assert msgs[0]["content"] == "q2"          # oldest kept is the 2nd of 4
+
+    def test_empty_and_blank_pairs_skipped(self):
+        assert assistant.history_messages(None) == []
+        assert assistant.history_messages([["", "a"], ["q", "  "]]) == []

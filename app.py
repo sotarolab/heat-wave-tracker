@@ -2613,6 +2613,58 @@ def _asst_latest_obs(station_id: str, tz) -> dict | None:
     return latest
 
 
+_ASST_NET_CACHE: dict = {"t": 0.0, "df": None}
+
+
+def _asst_current_conditions(limit: int = 10) -> dict:
+    """Latest observation per station across the network, ranked by
+    temperature. One IEM request per 100 stations through the DA ingest
+    fetch, cached for 10 minutes, so a burst of questions does not turn
+    into a burst of IEM requests."""
+    import time as _time
+    from src.heat.da.asos_network import fetch_obs_window
+    from src.heat.compute import heat_index_array
+    if _time.monotonic() - _ASST_NET_CACHE["t"] > _ASST_OBS_TTL_S or _ASST_NET_CACHE["df"] is None:
+        end = pd.Timestamp.now(tz="UTC")
+        try:
+            df, diag = fetch_obs_window([st["id"] for st in MAJOR_CONUS_STATIONS],
+                                        end - pd.Timedelta(hours=3), end)
+        except Exception as exc:
+            print(f"[assistant] network obs fetch failed: {exc}")
+            df, diag = pd.DataFrame(), {"failed_batches": 1}
+        _ASST_NET_CACHE.update({"t": _time.monotonic(), "df": df,
+                                "partial": bool(diag.get("failed_batches"))})
+    df = _ASST_NET_CACHE["df"]
+    if df is None or df.empty:
+        return {"error": "no current observations available"}
+    latest = (df.dropna(subset=["temp_c"]).sort_values("valid_utc")
+                .groupby("station_id").tail(1))
+    rows = []
+    for r in latest.itertuples(index=False):
+        # IEM returns ids without the ICAO "K" prefix ("DCA"); the station
+        # table uses "KDCA". Try both.
+        st = get_station(r.station_id) or get_station("K" + str(r.station_id))
+        if st is None:
+            continue
+        tz = ZoneInfo(st.get("tz", "America/New_York"))
+        t_f = float(r.temp_c) * 9 / 5 + 32
+        hi_f = None
+        if pd.notna(r.dewpoint_c):
+            hi_f = float(heat_index_array(np.array([r.temp_c]), np.array([r.dewpoint_c]))[0]) * 9 / 5 + 32
+        rows.append({"station_id": st["id"], "name": st["name"], "state": st["state"],
+                     "temp_f": round(t_f, 1),
+                     "heat_index_f": round(hi_f, 1) if hi_f is not None else None,
+                     "observed_local": pd.Timestamp(r.valid_utc).tz_convert(tz).strftime("%a %I:%M %p")})
+    rows.sort(key=lambda x: -x["temp_f"])
+    note = "latest routine observation per station; heat index from observed temp and dewpoint"
+    if _ASST_NET_CACHE.get("partial"):
+        note += (f"; PARTIAL COVERAGE: only {len(rows)} of {len(MAJOR_CONUS_STATIONS)} stations "
+                 f"reported (a data request was rate-limited); say so in the answer")
+    return {"as_of_utc": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M"),
+            "stations_reporting": len(rows), "stations_total": len(MAJOR_CONUS_STATIONS),
+            "hottest": rows[:limit], "note": note}
+
+
 def _asst_compare(station_ids: list, hours_ahead: int = 48) -> dict:
     """Shared time axis, per-station raw and corrected series - one compact
     payload for multi-station questions."""
@@ -2760,10 +2812,26 @@ def _asst_safety() -> dict:
 _assistant.configure(_assistant.Provider(
     find_stations=_asst_find_stations, station_forecast=_asst_station_forecast,
     hottest_stations=_asst_hottest, compare_stations=_asst_compare,
+    current_conditions=_asst_current_conditions,
     heat_streak=_asst_streak, when_it_breaks=_asst_breaks,
     verification=_asst_verification, safety_table=_asst_safety))
 _ASSISTANT_ON = _assistant.available()
 print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
+
+
+_ASSISTANT_EXAMPLES = [
+    "Where is it hottest right now?",
+    "How hot will it get in Washington DC tomorrow, and when?",
+    "Compare the next 48 hours for DCA and BWI",
+    "How many more days does the heat last in Omaha?",
+    "How accurate has the corrected forecast been?",
+    "Is it safe to run outside in Phoenix this afternoon?",
+]
+
+_PANEL_STYLE = {"position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "440px",
+                "maxWidth": "100vw", "zIndex": 999, "overflowY": "auto", "padding": "14px 16px",
+                "backgroundColor": "#0f172a", "borderLeft": "1px solid #334155",
+                "boxShadow": "-8px 0 24px rgba(0,0,0,0.5)", "display": "block"}
 
 
 def _render_assistant(result: dict, unit: str) -> list:
@@ -2794,7 +2862,7 @@ def _render_assistant(result: dict, unit: str) -> list:
                     fig.add_trace(go.Scatter(x=r["x"], y=srs["y"], mode="lines+markers",
                                              name=srs["name"]))
             fig.update_layout(title=dict(text=r["title"], font=dict(size=12, color="#e2e8f0")),
-                              paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG, height=280,
+                              paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG, height=240,
                               margin=dict(l=40, r=10, t=36, b=40), font=dict(color=_PANEL_FONT),
                               yaxis=dict(title=r.get("y_label", ""), gridcolor=_PANEL_GRID),
                               xaxis=dict(gridcolor=_PANEL_GRID),
@@ -3088,55 +3156,6 @@ app.layout = html.Div(
             ],
         )),
 
-        # ── ask the model ────────────────────────────────────────────────────
-        # Hidden entirely when the assistant has no credentials: the page
-        # must look exactly as it did before this existed on a deployment
-        # without a key, rather than show a control that fails when pressed.
-        _page_section(None, None, html.Div(
-            id="assistant-section",
-            style={"padding": "0 24px 24px 24px",
-                   "display": "block" if _ASSISTANT_ON else "none"},
-            children=[
-                html.Div("Ask about the forecast",
-                         style={"fontSize": "15px", "fontWeight": "700", "color": "#f8fafc",
-                                "marginBottom": "2px"}),
-                html.Div("Answers come only from this site's forecast, its learned correction, "
-                         "and its verification record. Charts and tables are drawn from the same "
-                         "numbers. Heat safety guidance is quoted from the National Weather Service.",
-                         style={"fontSize": "11px", "color": "#64748b", "marginBottom": "8px",
-                                "maxWidth": "760px"}),
-                html.Div(style={"display": "flex", "gap": "8px", "maxWidth": "760px"}, children=[
-                    dcc.Input(id="assistant-input", type="text", maxLength=500, debounce=True,
-                              placeholder="Where is it hottest tomorrow? What will Denver be at 5 PM?",
-                              style={"flex": "1", "fontSize": "13px", "padding": "8px 10px",
-                                     "borderRadius": "6px", "border": "1px solid #334155",
-                                     "backgroundColor": "#0f172a", "color": "#e2e8f0"}),
-                    html.Button("Ask", id="assistant-send", n_clicks=0,
-                                style={"fontSize": "13px", "padding": "8px 16px", "borderRadius": "6px",
-                                       "border": "1px solid #7c3aed", "backgroundColor": "#6d28d9",
-                                       "color": "white", "cursor": "pointer"}),
-                ]),
-                html.Div(style={"display": "flex", "gap": "6px", "flexWrap": "wrap", "marginTop": "6px"},
-                         children=[html.Button(q, id={"type": "assistant-example", "index": i}, n_clicks=0,
-                                               style={"fontSize": "11px", "padding": "4px 10px",
-                                                      "borderRadius": "12px", "border": "1px solid #334155",
-                                                      "backgroundColor": "#1e293b", "color": "#cbd5e1",
-                                                      "cursor": "pointer"})
-                                   for i, q in enumerate([
-                                       "Where is it hottest right now?",
-                                       "How hot will it get in Washington DC tomorrow, and when?",
-                                       "How many more days does the heat last in Omaha?",
-                                       "How accurate has the corrected forecast been?",
-                                       "Is it safe to run outside in Phoenix this afternoon?"])]),
-                dcc.Loading(html.Div(id="assistant-answer",
-                                     style={"marginTop": "10px", "maxWidth": "860px",
-                                            "backgroundColor": "#1e293b", "borderRadius": "8px",
-                                            "padding": "10px 12px", "border": "1px solid #334155",
-                                            "display": "none"}),
-                            type="dot", color="#a855f7"),
-            ],
-        )),
-
         # ── forecast verification ────────────────────────────────────────────
         # The deepest-in-the-weeds content (same-day N/Bias/RMSE/Brier) gets
         # the very last content section on the page, below even the charts -
@@ -3167,6 +3186,59 @@ app.layout = html.Div(
 
         # ── hidden components ─────────────────────────────────────────────────
         dcc.Store(id="selected-station", data="KDCA"),
+
+        # ── Sol: floating launcher + side panel ──────────────────────────────
+        # Always reachable from anywhere on the page, never in the way. Both
+        # elements are removed (display none) when no credential exists.
+        dcc.Store(id="assistant-history", data=[]),
+        dcc.Store(id="assistant-open", data=False),
+        html.Button(f"☀️ Ask {_assistant.ASSISTANT_NAME}", id="assistant-launcher", n_clicks=0,
+                    style={"position": "fixed", "right": "18px", "bottom": "18px", "zIndex": 1000,
+                           "fontSize": "14px", "fontWeight": "700", "padding": "10px 16px",
+                           "borderRadius": "22px", "border": "1px solid #7c3aed",
+                           "backgroundColor": "#6d28d9", "color": "white", "cursor": "pointer",
+                           "boxShadow": "0 4px 16px rgba(0,0,0,0.45)",
+                           "display": "block" if _ASSISTANT_ON else "none"}),
+        html.Div(id="assistant-panel", style={"display": "none"}, children=[
+            html.Div(style={"display": "flex", "alignItems": "center", "justifyContent": "space-between",
+                            "marginBottom": "6px"}, children=[
+                html.Div(f"☀️ {_assistant.ASSISTANT_NAME}", style={"fontSize": "16px", "fontWeight": "700",
+                                                                     "color": "#f8fafc"}),
+                html.Div([
+                    html.Button("New chat", id="assistant-reset", n_clicks=0,
+                                style={"fontSize": "11px", "padding": "3px 8px", "marginRight": "6px",
+                                       "borderRadius": "6px", "border": "1px solid #334155",
+                                       "backgroundColor": "#1e293b", "color": "#cbd5e1", "cursor": "pointer"}),
+                    html.Button("×", id="assistant-close", n_clicks=0,
+                                style={"fontSize": "16px", "padding": "0 8px", "borderRadius": "6px",
+                                       "border": "1px solid #334155", "backgroundColor": "#1e293b",
+                                       "color": "#cbd5e1", "cursor": "pointer"}),
+                ]),
+            ]),
+            html.Div("Answers only from this site's forecast, its learned correction, and its "
+                     "verification record. Heat safety guidance is quoted from the NWS.",
+                     style={"fontSize": "10px", "color": "#64748b", "marginBottom": "8px"}),
+            html.Div(id="assistant-answer", style={"display": "none"}),
+            html.Div(style={"display": "flex", "gap": "6px", "marginTop": "8px"}, children=[
+                dcc.Input(id="assistant-input", type="text", maxLength=500, debounce=True,
+                          placeholder="Where is it hottest right now?",
+                          style={"flex": "1", "fontSize": "13px", "padding": "8px 10px",
+                                 "borderRadius": "6px", "border": "1px solid #334155",
+                                 "backgroundColor": "#0f172a", "color": "#e2e8f0"}),
+                html.Button("Ask", id="assistant-send", n_clicks=0,
+                            style={"fontSize": "13px", "padding": "8px 14px", "borderRadius": "6px",
+                                   "border": "1px solid #7c3aed", "backgroundColor": "#6d28d9",
+                                   "color": "white", "cursor": "pointer"}),
+            ]),
+            html.Div(style={"display": "flex", "gap": "5px", "flexWrap": "wrap", "marginTop": "6px"},
+                     children=[html.Button(q, id={"type": "assistant-example", "index": i}, n_clicks=0,
+                                           style={"fontSize": "10px", "padding": "3px 8px",
+                                                  "borderRadius": "10px", "border": "1px solid #334155",
+                                                  "backgroundColor": "#1e293b", "color": "#cbd5e1",
+                                                  "cursor": "pointer"})
+                               for i, q in enumerate(_ASSISTANT_EXAMPLES)]),
+            dcc.Loading(html.Div(id="assistant-busy"), type="dot", color="#a855f7"),
+        ]),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
     ],
@@ -3592,56 +3664,72 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
 
 
 @app.callback(
+    Output("assistant-panel", "style"),
+    Input("assistant-launcher", "n_clicks"),
+    Input("assistant-close", "n_clicks"),
+    State("assistant-panel", "style"),
+    prevent_initial_call=True,
+)
+def toggle_assistant(_open, _close, style):
+    if ctx.triggered_id == "assistant-close":
+        return {"display": "none"}
+    return {"display": "none"} if (style or {}).get("display") == "block" else _PANEL_STYLE
+
+
+@app.callback(
     Output("assistant-answer", "children"),
     Output("assistant-answer", "style"),
     Output("assistant-input", "value"),
+    Output("assistant-history", "data"),
+    Output("assistant-busy", "children"),
     Input("assistant-send", "n_clicks"),
     Input("assistant-input", "n_submit"),
     Input({"type": "assistant-example", "index": ALL}, "n_clicks"),
+    Input("assistant-reset", "n_clicks"),
     State("assistant-input", "value"),
     State("unit-selector", "value"),
+    State("assistant-history", "data"),
     prevent_initial_call=True,
 )
-def ask_assistant(_n, _submit, _example_clicks, question, unit):
-    """One question, one grounded answer. Example chips fill the question
-    and ask it; the Enter key and the button ask what was typed."""
+def ask_assistant(_n, _submit, _example_clicks, _reset, question, unit, history):
+    """One question, one grounded answer, with the last few exchanges of
+    this browser session carried along so follow-ups resolve. Example
+    chips fill and ask; Enter and the button ask what was typed; New chat
+    clears the memory."""
     from flask import request
     triggered = ctx.triggered_id
+    hidden = {"display": "none"}
+    shown = {"marginTop": "6px", "backgroundColor": "#1e293b", "borderRadius": "8px",
+             "padding": "10px 12px", "border": "1px solid #334155", "display": "block"}
+    if triggered == "assistant-reset":
+        return [], hidden, "", [], no_update
     if isinstance(triggered, dict) and triggered.get("type") == "assistant-example":
         if not (ctx.triggered and ctx.triggered[0]["value"]):
-            return no_update, no_update, no_update
-        examples = ["Where is it hottest right now?",
-                    "How hot will it get in Washington DC tomorrow, and when?",
-                    "How many more days does the heat last in Omaha?",
-                    "How accurate has the corrected forecast been?",
-                    "Is it safe to run outside in Phoenix this afternoon?"]
-        question = examples[triggered["index"]]
+            return no_update, no_update, no_update, no_update, no_update
+        question = _ASSISTANT_EXAMPLES[triggered["index"]]
     if not question or not question.strip():
-        return no_update, no_update, no_update
-    shown = {"marginTop": "10px", "maxWidth": "860px", "backgroundColor": "#1e293b",
-             "borderRadius": "8px", "padding": "10px 12px", "border": "1px solid #334155",
-             "display": "block"}
+        return no_update, no_update, no_update, no_update, no_update
+    err = lambda msg: (html.Div(msg, style={"fontSize": "12px", "color": "#f87171"}), shown,
+                       question, history or [], no_update)
+    if _assistant.spend_exhausted():
+        return err("Sol has used its budget for today. Try again tomorrow.")
     fwd = request.headers.get("x-forwarded-for", "")
     key = fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
-    if _assistant.spend_exhausted():
-        return html.Div("The assistant has used its budget for today. Try again tomorrow.",
-                        style={"fontSize": "12px", "color": "#f87171"}), shown, question
     reason = _assistant.check_rate_limit(key)
     if reason:
-        return html.Div(reason, style={"fontSize": "12px", "color": "#f87171"}), shown, question
+        return err(reason)
     try:
-        result = _assistant.ask(question.strip())
+        result = _assistant.ask(question.strip(), history=history or [])
     except Exception as exc:
         print(f"[assistant] failed: {exc}")
-        return html.Div("The assistant is unavailable right now.",
-                        style={"fontSize": "12px", "color": "#f87171"}), shown, question
+        return err("Sol is unavailable right now.")
     u = result.get("usage", {})
     _assistant.record_spend(u)
-    # One log line per question: the cost record, without the question text.
     print(f"[assistant] {u.get('seconds')}s iters={u.get('iterations')} "
           f"in={u.get('input_tokens')} cached={u.get('cache_read_input_tokens')} "
           f"out={u.get('output_tokens')} tools={result.get('tools_used')}")
-    return _render_assistant(result, unit or "F"), shown, question
+    new_history = ((history or []) + [[question.strip(), result["answer"]]])[-_assistant.HISTORY_TURNS:]
+    return _render_assistant(result, unit or "F"), shown, "", new_history, no_update
 
 
 if __name__ == "__main__":

@@ -34,6 +34,8 @@ from collections import defaultdict, deque
 from dataclasses import dataclass, field
 
 MODEL = "claude-opus-5"
+ASSISTANT_NAME = "Sol"
+HISTORY_TURNS = 3            # prior exchanges carried into a follow-up question
 MAX_TOKENS = 4096
 MAX_TOOL_ITERATIONS = 6
 
@@ -41,8 +43,15 @@ MAX_TOOL_ITERATIONS = 6
 MAX_TABLE_ROWS = 25
 MAX_CHART_POINTS = 120
 
-SYSTEM_PROMPT = """You are the assistant for a US heat wave tracker. You answer questions about THIS
-site's forecast, its learned correction, and its verification record, using the tools provided.
+SYSTEM_PROMPT = """You are Sol, the assistant for a US heat wave tracker. You answer questions about
+THIS site's forecast, its learned correction, and its verification record, using the tools provided.
+
+## "Right now" means observations; "today" means the forecast peak
+
+For "right now", "currently", "at the moment": call current_conditions, which returns the latest
+observed temperatures across the network with their observation times. For "today", "tomorrow",
+or a date: call hottest_stations, which returns each station's forecast peak for that day. Never
+answer a "right now" question with a daily peak that has already passed.
 
 ## Ground every answer in tool results
 
@@ -87,6 +96,7 @@ class Provider:
     find_stations: object          # (query: str) -> list[dict]
     station_forecast: object       # (station_id, hours_ahead) -> dict
     hottest_stations: object       # (day: str, limit: int) -> dict
+    current_conditions: object     # (limit: int) -> dict
     compare_stations: object       # (station_ids: list[str], hours_ahead) -> dict
     heat_streak: object            # (station_id) -> dict
     when_it_breaks: object         # (station_id) -> dict
@@ -177,6 +187,14 @@ def _build_tools():
         return _dumps(_p().compare_stations([str(x) for x in station_ids][:6], int(hours_ahead)))
 
     @beta_tool
+    def current_conditions(limit: int = 10) -> str:
+        """The latest OBSERVED temperature and heat index at every station right now, ranked
+        hottest first, with each observation's station-local time. Use for "where is it hottest
+        right now", "what is it currently", or any question about present conditions.
+        """
+        return _dumps(_p().current_conditions(int(limit)))
+
+    @beta_tool
     def hottest_stations(day: str = "today", limit: int = 10) -> str:
         """The stations with the highest forecast peak heat index for a day. `day` is "today",
         "tomorrow", or a date like 2026-09-04. Returns each station's peak feels-like temperature
@@ -246,7 +264,8 @@ def _build_tools():
         """
         return _capture("station_chart", {"station_id": station_id})
 
-    return [find_stations, station_forecast, compare_stations, hottest_stations, heat_streak, when_it_breaks,
+    return [find_stations, station_forecast, compare_stations, hottest_stations, current_conditions,
+            heat_streak, when_it_breaks,
             verification_summary, heat_safety_guidance, show_table, show_chart,
             show_station_forecast]
 
@@ -258,7 +277,22 @@ EFFORT = os.environ.get("ASK_EFFORT", "low")          # chat-shaped questions do
 MAX_QUESTION_TOKENS = int(os.environ.get("ASK_MAX_QUESTION_TOKENS", "60000"))
 
 
-def ask(question: str, client=None, effort: str | None = None) -> dict:
+def history_messages(history: list | None) -> list:
+    """Turn prior (question, answer) pairs into message turns. Text only,
+    last HISTORY_TURNS exchanges: enough for "and Baltimore?" to resolve,
+    small enough that the grounding rules are restated every call by the
+    tools themselves, not by what a user asserted earlier."""
+    msgs = []
+    for q, a in (history or [])[-HISTORY_TURNS:]:
+        q, a = str(q).strip(), str(a).strip()
+        if q and a:
+            msgs.append({"role": "user", "content": q[:600]})
+            msgs.append({"role": "assistant", "content": a[:1500]})
+    return msgs
+
+
+def ask(question: str, client=None, effort: str | None = None,
+        history: list | None = None) -> dict:
     """Answer one question. Returns {answer, tools_used, renders, usage}.
 
     usage: {input_tokens, cache_read_input_tokens, output_tokens,
@@ -285,7 +319,7 @@ def ask(question: str, client=None, effort: str | None = None) -> dict:
             system=[{"type": "text", "text": SYSTEM_PROMPT,
                      "cache_control": {"type": "ephemeral"}}],
             tools=_TOOLS,
-            messages=[{"role": "user", "content": question[:600]}],
+            messages=history_messages(history) + [{"role": "user", "content": question[:600]}],
         )
         tools_used: list[str] = []
         answer = ""

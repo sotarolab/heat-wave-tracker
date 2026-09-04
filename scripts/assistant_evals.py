@@ -40,8 +40,12 @@ class Case:
 
 
 CASES = [
-    Case("grounding-hottest", "Where is it hottest right now?",
-         "Answerable from training with plausible cities; must come from the peaks tool.",
+    Case("grounding-right-now", "Where is it hottest right now?",
+         "'Right now' means observations, not today's forecast peak, which by evening has passed.",
+         must_call_any=("current_conditions",), must_render_any=("table", "chart"),
+         tags=("grounding", "render")),
+    Case("grounding-today-peak", "Where will it be hottest today?",
+         "'Today' means the forecast peak of the day.",
          must_call_any=("hottest_stations",), must_render_any=("table", "chart"),
          tags=("grounding", "render")),
     Case("grounding-station-time", "What will the temperature be in Denver at 5 PM tomorrow?",
