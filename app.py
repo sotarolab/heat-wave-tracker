@@ -2683,6 +2683,52 @@ def _asst_current_conditions(limit: int = 10) -> dict:
             "hottest": rows[:limit], "note": note}
 
 
+def _asst_station_observations(station_id: str, hours: int = 6) -> dict:
+    """Observed history at a station over the past `hours` (cached 72 h
+    fetch), with a plain summary of the temperature change."""
+    stn = get_station(station_id)
+    if stn is None:
+        return {"error": f"unknown station {station_id}"}
+    hours = max(1, min(int(hours), 72))
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    obs = _asst_obs72(station_id)
+    if obs.empty:
+        return {"error": f"no observations available for {station_id}"}
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=hours)
+    win = obs[obs.valid_utc >= cutoff].sort_values("valid_utc")
+    if len(win) < 2:
+        return {"error": f"fewer than two observations in the past {hours} h at {station_id}"}
+    def f(x):
+        return None if x is None or (isinstance(x, float) and x != x) else round(float(x) * 9 / 5 + 32, 1)
+    def g(row, col):
+        v = getattr(row, col, None)
+        return None if v is None or (isinstance(v, float) and v != v) else v
+    rows = []
+    for r in win.itertuples(index=False):
+        rows.append({"time_local": r.valid_utc.tz_convert(tz).strftime("%a %I:%M %p"),
+                     "temp_f": f(r.temp_c), "dewpoint_f": f(r.dewpoint_c),
+                     "wind_kt": g(r, "wind_spd_kt"), "gust_kt": g(r, "wind_gust_kt"),
+                     "sky_cover": g(r, "sky_cover"),
+                     "pressure_hpa": None if g(r, "pressure_hpa") is None else round(float(r.pressure_hpa), 1),
+                     "wx": g(r, "wx_codes")})
+    first, last = win.iloc[0], win.iloc[-1]
+    dt_h = max((last.valid_utc - first.valid_utc).total_seconds() / 3600.0, 0.5)
+    change = f(last.temp_c) - f(first.temp_c)
+    cond = []
+    if "sky_cover" in win and win["sky_cover"].notna().any():
+        m = win["sky_cover"].mean()
+        cond.append("mostly clear skies" if m < 0.3 else "mostly cloudy skies" if m > 0.7 else "partly cloudy skies")
+    if win["wind_spd_kt"].notna().any():
+        cond.append(f"winds averaging {win['wind_spd_kt'].mean():.0f} kt")
+    summary = {"start_time_local": rows[0]["time_local"], "end_time_local": rows[-1]["time_local"],
+               "start_temp_f": rows[0]["temp_f"], "end_temp_f": rows[-1]["temp_f"],
+               "change_f": round(change, 1), "rate_f_per_h": round(change / dt_h, 2),
+               "max_temp_f": max(r["temp_f"] for r in rows), "min_temp_f": min(r["temp_f"] for r in rows),
+               "conditions": ("Conditions: " + ", ".join(cond) + ".") if cond else ""}
+    return {"station_id": station_id, "name": stn["name"], "hours": hours, "rows": rows, "summary": summary,
+            "note": "routine hourly ASOS observations; sky cover 0 (clear) to 1 (overcast)"}
+
+
 def _asst_compare(station_ids: list, hours_ahead: int = 48) -> dict:
     """Shared time axis, per-station raw and corrected series - one compact
     payload for multi-station questions."""
@@ -2832,7 +2878,8 @@ _assistant.configure(_assistant.Provider(
     hottest_stations=_asst_hottest, compare_stations=_asst_compare,
     current_conditions=_asst_current_conditions,
     heat_streak=_asst_streak, when_it_breaks=_asst_breaks,
-    verification=_asst_verification, safety_table=_asst_safety))
+    verification=_asst_verification, safety_table=_asst_safety,
+    station_observations=_asst_station_observations))
 _ASSISTANT_ON = _assistant.available()
 print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
 

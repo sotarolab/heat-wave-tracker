@@ -152,6 +152,12 @@ class TestFastPaths:
             verification=lambda: {"model_version": "v", "window": "w", "scored_station_hours": 10,
                                   "rmse_f": {"raw_gfs": 3.87, "per_station_offset_baseline": 3.62,
                                              "learned_correction": 2.92}, "band95_observed_coverage": 0.94},
+            station_observations=lambda sid, h: {"name": "DC", "rows": [
+                {"time_local": "8 PM", "temp_f": 90.0, "dewpoint_f": 70.0},
+                {"time_local": "9 PM", "temp_f": 86.0, "dewpoint_f": 70.0}],
+                "summary": {"start_time_local": "8 PM", "end_time_local": "9 PM", "start_temp_f": 90.0,
+                            "end_temp_f": 86.0, "change_f": -4.0, "rate_f_per_h": -4.0,
+                            "conditions": "Conditions: clear."}},
             safety_table=lambda: {"categories": [
                 {"min_heat_index_f": 80, "category": "Caution", "description": "Fatigue possible."},
                 {"min_heat_index_f": 90, "category": "Extreme Caution", "description": "Heat cramps possible."},
