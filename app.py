@@ -3663,17 +3663,28 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
 # ── entry point ───────────────────────────────────────────────────────────────
 
 
+_LAUNCHER_STYLE = {"position": "fixed", "right": "18px", "bottom": "18px", "zIndex": 1000,
+                   "fontSize": "14px", "fontWeight": "700", "padding": "10px 16px",
+                   "borderRadius": "22px", "border": "1px solid #7c3aed",
+                   "backgroundColor": "#6d28d9", "color": "white", "cursor": "pointer",
+                   "boxShadow": "0 4px 16px rgba(0,0,0,0.45)"}
+
+
 @app.callback(
     Output("assistant-panel", "style"),
+    Output("assistant-launcher", "style"),
     Input("assistant-launcher", "n_clicks"),
     Input("assistant-close", "n_clicks"),
     State("assistant-panel", "style"),
     prevent_initial_call=True,
 )
 def toggle_assistant(_open, _close, style):
-    if ctx.triggered_id == "assistant-close":
-        return {"display": "none"}
-    return {"display": "none"} if (style or {}).get("display") == "block" else _PANEL_STYLE
+    """The launcher hides while the panel is open (it would sit inside the
+    panel's area otherwise) and returns when the panel closes."""
+    is_open = (style or {}).get("display") == "block"
+    if ctx.triggered_id == "assistant-close" or is_open:
+        return {"display": "none"}, _LAUNCHER_STYLE
+    return _PANEL_STYLE, {**_LAUNCHER_STYLE, "display": "none"}
 
 
 @app.callback(
