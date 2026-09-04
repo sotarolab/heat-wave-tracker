@@ -1818,6 +1818,58 @@ def _hero_card(number_text: str, sub_label: str, border_color: str,
     })
 
 
+_WIND_DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+              "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+
+
+def _sky_words(frac: float) -> str:
+    if frac <= 0.05:
+        return "clear"
+    if frac <= 0.3:
+        return "a few clouds"
+    if frac <= 0.6:
+        return "partly cloudy"
+    if frac <= 0.9:
+        return "mostly cloudy"
+    return "overcast"
+
+
+def _conditions_line(asos_df: pd.DataFrame, tz) -> html.Div:
+    """One line of the latest observed conditions beyond temperature:
+    wind, gusts, sky, ceiling, pressure, visibility, present weather.
+    These are the observed gates of the model's nocturnal warm bias
+    (calm, clear, dry), shown as plain words. Empty if unavailable."""
+    if asos_df is None or asos_df.empty or "wind_spd_kt" not in asos_df:
+        return html.Div()
+    last = asos_df.sort_values("valid_utc").iloc[-1]
+    def ok(v):
+        return v is not None and not (isinstance(v, float) and v != v)
+    parts = []
+    if ok(last.wind_spd_kt):
+        w = f"wind {int(round(last.wind_spd_kt))} kt"
+        if ok(getattr(last, "wind_dir_deg", None)) and last.wind_spd_kt > 0:
+            w = f"wind {_WIND_DIRS[int((last.wind_dir_deg + 11.25) // 22.5) % 16]} {int(round(last.wind_spd_kt))} kt"
+        if ok(getattr(last, "wind_gust_kt", None)):
+            w += f" gusting {int(round(last.wind_gust_kt))}"
+        parts.append("calm" if last.wind_spd_kt == 0 else w)
+    if ok(getattr(last, "sky_cover", None)):
+        sky = _sky_words(float(last.sky_cover))
+        if ok(getattr(last, "ceiling_ft", None)):
+            sky += f", ceiling {int(last.ceiling_ft):,} ft"
+        parts.append(sky)
+    if ok(getattr(last, "pressure_hpa", None)):
+        parts.append(f"{last.pressure_hpa:.1f} hPa")
+    if ok(getattr(last, "visibility_mi", None)) and last.visibility_mi < 10:
+        parts.append(f"visibility {last.visibility_mi:g} mi")
+    if ok(getattr(last, "wx_codes", None)) and str(last.wx_codes) not in ("None", "nan", ""):
+        parts.append(str(last.wx_codes))
+    if not parts:
+        return html.Div()
+    when = last.valid_utc.tz_convert(tz).strftime("%I:%M %p").lstrip("0")
+    return html.Div(f"Conditions at {when}: " + " · ".join(parts),
+                    style={"fontSize": "12px", "color": "#94a3b8", "margin": "6px 0 2px 0"})
+
+
 def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame) -> html.Div:
     """Single "Feels Like" headline card, ahead of the line charts.
 
@@ -3745,6 +3797,7 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     # historical rarity of the event as the capstone of that thought.
     panel_headline = html.Div([
         _hero_tile(station_id, time_idx, unit, asos_df),
+        _conditions_line(asos_df, ZoneInfo(stn.get("tz", "America/New_York"))),
         _climate_context(station_id, unit),
         _overnight_and_streak_panel(station_id),
         _gev_popup(station_id, unit, time_idx),
