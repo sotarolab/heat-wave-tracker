@@ -77,3 +77,26 @@ class TestConfiguration:
         monkeypatch.setattr(assistant, "_provider", None)
         with pytest.raises(RuntimeError):
             assistant._p()
+
+
+class TestSpendBudget:
+    def setup_method(self):
+        assistant._spend.update({"day": None, "tokens": 0})
+
+    def test_accumulates_and_exhausts(self, monkeypatch):
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 1000)
+        assistant.record_spend({"input_tokens": 600, "output_tokens": 100}, now_day="d1")
+        assert assistant.spend_exhausted(now_day="d1") is False
+        assistant.record_spend({"input_tokens": 300, "output_tokens": 0}, now_day="d1")
+        assert assistant.spend_exhausted(now_day="d1") is True
+
+    def test_resets_on_new_day(self, monkeypatch):
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 100)
+        assistant.record_spend({"input_tokens": 100, "output_tokens": 0}, now_day="d1")
+        assert assistant.spend_exhausted(now_day="d2") is False
+
+    def test_cache_reads_count_at_a_tenth(self, monkeypatch):
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 100)
+        assistant.record_spend({"cache_read_input_tokens": 900}, now_day="d1")
+        assert assistant._spend["tokens"] == 90
+        assert assistant.spend_exhausted(now_day="d1") is False

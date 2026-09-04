@@ -2588,6 +2588,65 @@ def _asst_find_stations(query: str) -> list[dict]:
     return out[:12]
 
 
+# Observations for the assistant come through a short in-process cache:
+# each question would otherwise hit IEM once per station, which is slow
+# and, under a burst of questions, gets this app rate-limited by IEM.
+_ASST_OBS_CACHE: dict = {}
+_ASST_OBS_TTL_S = 600
+
+
+def _asst_latest_obs(station_id: str, tz) -> dict | None:
+    import time as _time
+    hit = _ASST_OBS_CACHE.get(station_id)
+    if hit and _time.monotonic() - hit[0] < _ASST_OBS_TTL_S:
+        return hit[1]
+    latest = None
+    try:
+        obs = fetch_station_obs(station_id, hours=6)
+        if not obs.empty:
+            last = obs.dropna(subset=["temp_c"]).iloc[-1]
+            latest = {"time_local": last.valid_utc.tz_convert(tz).strftime("%a %b %d %I:%M %p"),
+                      "temp_f": round(float(last.temp_c) * 9 / 5 + 32, 1)}
+    except Exception:
+        latest = None
+    _ASST_OBS_CACHE[station_id] = (_time.monotonic(), latest)
+    return latest
+
+
+def _asst_compare(station_ids: list, hours_ahead: int = 48) -> dict:
+    """Shared time axis, per-station raw and corrected series - one compact
+    payload for multi-station questions."""
+    if _GFS_DS is None:
+        return {"error": "no forecast loaded"}
+    stns = [get_station(s) for s in station_ids]
+    unknown = [sid for sid, st in zip(station_ids, stns) if st is None]
+    stns = [st for st in stns if st is not None]
+    if not stns:
+        return {"error": f"unknown stations {unknown}"}
+    tz = ZoneInfo(stns[0].get("tz", "America/New_York"))
+    times = pd.DatetimeIndex(_GFS_DS.time.values).tz_localize("UTC")
+    now = pd.Timestamp.now(tz="UTC")
+    keep = (times >= now - pd.Timedelta(hours=2)) & (times <= now + pd.Timedelta(hours=hours_ahead))
+    times = times[keep]
+    out = {"times_local": [t.tz_convert(tz).strftime("%a %I %p") for t in times],
+           "time_zone": str(tz), "stations": {}, "unknown": unknown,
+           "note": "temperatures in F; corrected is the learned model (v2), null beyond its coverage"}
+    for st in stns:
+        sel = dict(latitude=st["lat"], longitude=st["lon"], method="nearest")
+        raw = _GFS_DS["t2m"].sel(**sel).values[keep]
+        ml = _ML_LINE.get(st["id"]) if _ML_LINE else None
+        corr = []
+        for t in times:
+            if ml is not None and t in ml.index:
+                corr.append(round(float(ml.loc[t].ml_c) * 9 / 5 + 32, 1))
+            else:
+                corr.append(None)
+        out["stations"][st["id"]] = {"name": st["name"],
+                                     "raw_f": [round(float(v) * 9 / 5 + 32, 1) for v in raw],
+                                     "corrected_f": corr}
+    return out
+
+
 def _asst_station_forecast(station_id: str, hours_ahead: int = 48) -> dict:
     stn = get_station(station_id)
     if stn is None or _GFS_DS is None:
@@ -2613,15 +2672,7 @@ def _asst_station_forecast(station_id: str, hours_ahead: int = 48) -> dict:
                 if pd.notna(r.lo_c):
                     row["band80_f"] = [round(r.lo_c * 9 / 5 + 32, 1), round(r.hi_c * 9 / 5 + 32, 1)]
         rows.append(row)
-    latest = None
-    try:
-        obs = fetch_station_obs(station_id, hours=6)
-        if not obs.empty:
-            last = obs.dropna(subset=["temp_c"]).iloc[-1]
-            latest = {"time_local": last.valid_utc.tz_convert(tz).strftime("%a %b %d %I:%M %p"),
-                      "temp_f": round(last.temp_c * 9 / 5 + 32, 1)}
-    except Exception:
-        pass
+    latest = _asst_latest_obs(station_id, tz)
     return {"station_id": station_id, "name": stn["name"], "state": stn["state"],
             "gfs_init_utc": str(_GFS_DS.attrs.get("gfs_init")),
             "corrected_available": ml is not None,
@@ -2708,7 +2759,8 @@ def _asst_safety() -> dict:
 
 _assistant.configure(_assistant.Provider(
     find_stations=_asst_find_stations, station_forecast=_asst_station_forecast,
-    hottest_stations=_asst_hottest, heat_streak=_asst_streak, when_it_breaks=_asst_breaks,
+    hottest_stations=_asst_hottest, compare_stations=_asst_compare,
+    heat_streak=_asst_streak, when_it_breaks=_asst_breaks,
     verification=_asst_verification, safety_table=_asst_safety))
 _ASSISTANT_ON = _assistant.available()
 print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
@@ -3571,6 +3623,9 @@ def ask_assistant(_n, _submit, _example_clicks, question, unit):
              "display": "block"}
     fwd = request.headers.get("x-forwarded-for", "")
     key = fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
+    if _assistant.spend_exhausted():
+        return html.Div("The assistant has used its budget for today. Try again tomorrow.",
+                        style={"fontSize": "12px", "color": "#f87171"}), shown, question
     reason = _assistant.check_rate_limit(key)
     if reason:
         return html.Div(reason, style={"fontSize": "12px", "color": "#f87171"}), shown, question
@@ -3580,6 +3635,12 @@ def ask_assistant(_n, _submit, _example_clicks, question, unit):
         print(f"[assistant] failed: {exc}")
         return html.Div("The assistant is unavailable right now.",
                         style={"fontSize": "12px", "color": "#f87171"}), shown, question
+    u = result.get("usage", {})
+    _assistant.record_spend(u)
+    # One log line per question: the cost record, without the question text.
+    print(f"[assistant] {u.get('seconds')}s iters={u.get('iterations')} "
+          f"in={u.get('input_tokens')} cached={u.get('cache_read_input_tokens')} "
+          f"out={u.get('output_tokens')} tools={result.get('tools_used')}")
     return _render_assistant(result, unit or "F"), shown, question
 
 

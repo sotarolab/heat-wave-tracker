@@ -35,7 +35,7 @@ from dataclasses import dataclass, field
 
 MODEL = "claude-opus-5"
 MAX_TOKENS = 4096
-MAX_TOOL_ITERATIONS = 8
+MAX_TOOL_ITERATIONS = 6
 
 # Bounded so one question cannot walk the whole archive.
 MAX_TABLE_ROWS = 25
@@ -87,6 +87,7 @@ class Provider:
     find_stations: object          # (query: str) -> list[dict]
     station_forecast: object       # (station_id, hours_ahead) -> dict
     hottest_stations: object       # (day: str, limit: int) -> dict
+    compare_stations: object       # (station_ids: list[str], hours_ahead) -> dict
     heat_streak: object            # (station_id) -> dict
     when_it_breaks: object         # (station_id) -> dict
     verification: object           # () -> dict
@@ -167,6 +168,15 @@ def _build_tools():
         return _dumps(_p().station_forecast(station_id, int(hours_ahead)))
 
     @beta_tool
+    def compare_stations(station_ids: list[str], hours_ahead: int = 48) -> str:
+        """Compact side-by-side forecast for 2 to 6 stations: one shared list of station-local
+        times and, per station, the raw GFS temperature and the corrected temperature (null where
+        the model has no coverage). Use this for any comparison or multi-station chart instead of
+        calling station_forecast once per station; it is much smaller.
+        """
+        return _dumps(_p().compare_stations([str(x) for x in station_ids][:6], int(hours_ahead)))
+
+    @beta_tool
     def hottest_stations(day: str = "today", limit: int = 10) -> str:
         """The stations with the highest forecast peak heat index for a day. `day` is "today",
         "tomorrow", or a date like 2026-09-04. Returns each station's peak feels-like temperature
@@ -236,7 +246,7 @@ def _build_tools():
         """
         return _capture("station_chart", {"station_id": station_id})
 
-    return [find_stations, station_forecast, hottest_stations, heat_streak, when_it_breaks,
+    return [find_stations, station_forecast, compare_stations, hottest_stations, heat_streak, when_it_breaks,
             verification_summary, heat_safety_guidance, show_table, show_chart,
             show_station_forecast]
 
@@ -244,8 +254,16 @@ def _build_tools():
 _TOOLS = None
 
 
-def ask(question: str, client=None) -> dict:
-    """Answer one question. Returns {answer, tools_used, renders}."""
+EFFORT = os.environ.get("ASK_EFFORT", "low")          # chat-shaped questions do well at low
+MAX_QUESTION_TOKENS = int(os.environ.get("ASK_MAX_QUESTION_TOKENS", "60000"))
+
+
+def ask(question: str, client=None, effort: str | None = None) -> dict:
+    """Answer one question. Returns {answer, tools_used, renders, usage}.
+
+    usage: {input_tokens, cache_read_input_tokens, output_tokens,
+    iterations, seconds} summed over the tool loop, so cost is visible per
+    question and can be budgeted (see spend_budget)."""
     global _TOOLS
     import anthropic
     if _TOOLS is None:
@@ -253,27 +271,43 @@ def ask(question: str, client=None) -> dict:
     client = client or anthropic.Anthropic()
 
     token = _renders.set([])
+    t0 = time.monotonic()
+    usage = {"input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0, "iterations": 0}
     try:
         runner = client.beta.messages.tool_runner(
             model=MODEL,
             max_tokens=MAX_TOKENS,
             thinking={"type": "adaptive"},
-            system=SYSTEM_PROMPT,
+            output_config={"effort": effort or EFFORT},
+            # The system prompt and the tool schemas are byte-identical on
+            # every call: cache them. Tools render before system in the
+            # prefix, so one breakpoint here covers both.
+            system=[{"type": "text", "text": SYSTEM_PROMPT,
+                     "cache_control": {"type": "ephemeral"}}],
             tools=_TOOLS,
             messages=[{"role": "user", "content": question[:600]}],
         )
         tools_used: list[str] = []
         answer = ""
         for i, message in enumerate(runner):
+            u = getattr(message, "usage", None)
+            if u is not None:
+                usage["input_tokens"] += int(getattr(u, "input_tokens", 0) or 0)
+                usage["cache_read_input_tokens"] += int(getattr(u, "cache_read_input_tokens", 0) or 0)
+                usage["output_tokens"] += int(getattr(u, "output_tokens", 0) or 0)
+            usage["iterations"] = i + 1
             for block in message.content:
                 if block.type == "tool_use":
                     tools_used.append(block.name)
                 elif block.type == "text" and block.text.strip():
                     answer = block.text
-            if i >= MAX_TOOL_ITERATIONS:
+            # Per-question ceilings: a runaway loop or an oversized result
+            # set stops here rather than on the bill.
+            if i >= MAX_TOOL_ITERATIONS or (usage["input_tokens"] + usage["output_tokens"]) > MAX_QUESTION_TOKENS:
                 break
+        usage["seconds"] = round(time.monotonic() - t0, 1)
         return {"answer": answer.strip(), "tools_used": tools_used,
-                "renders": list(_renders.get())}
+                "renders": list(_renders.get()), "usage": usage}
     finally:
         _renders.reset(token)
 
@@ -284,7 +318,7 @@ def ask(question: str, client=None) -> dict:
 
 ASK_PER_MINUTE = int(os.environ.get("ASK_PER_MINUTE", "5"))
 ASK_PER_DAY = int(os.environ.get("ASK_PER_DAY", "60"))
-ASK_GLOBAL_PER_DAY = int(os.environ.get("ASK_GLOBAL_PER_DAY", "600"))
+ASK_GLOBAL_PER_DAY = int(os.environ.get("ASK_GLOBAL_PER_DAY", "200"))
 _hits: dict = defaultdict(deque)
 
 
@@ -305,3 +339,25 @@ def check_rate_limit(client_key: str, now: float | None = None) -> str | None:
     q.append(now)
     _hits["__global__"].append(now)
     return None
+
+
+# ── daily token budget ───────────────────────────────────────────────────────
+# Request counts bound how many questions run; this bounds how large they
+# are in aggregate. Both are in-memory per process (see check_rate_limit).
+
+TOKENS_PER_DAY = int(os.environ.get("ASK_TOKENS_PER_DAY", "3000000"))
+_spend: dict = {"day": None, "tokens": 0}
+
+
+def record_spend(usage: dict, now_day: str | None = None) -> None:
+    """Add a question's tokens to today's tally (cache reads count at 10%)."""
+    day = now_day or time.strftime("%Y-%m-%d")
+    if _spend["day"] != day:
+        _spend["day"], _spend["tokens"] = day, 0
+    _spend["tokens"] += (usage.get("input_tokens", 0) + usage.get("output_tokens", 0)
+                         + usage.get("cache_read_input_tokens", 0) // 10)
+
+
+def spend_exhausted(now_day: str | None = None) -> bool:
+    day = now_day or time.strftime("%Y-%m-%d")
+    return _spend["day"] == day and _spend["tokens"] >= TOKENS_PER_DAY
