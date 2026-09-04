@@ -2598,9 +2598,55 @@ _ASST_OBS_TTL_S = 600
 _ASST_OBS72_CACHE: dict = {}
 
 
+def _asst_obs72_from_db(station_id: str) -> pd.DataFrame:
+    """Fallback observation history from the database when IEM is slow or
+    rate-limiting: observed t2m/td2m from forecast_obs_pairs (logged every
+    cycle), joined to the regime variables in station_obs_extra where
+    present. Current to the last workflow run rather than to the minute,
+    which the answer's timestamps make visible."""
+    db_url = os.environ.get("NEON_DATABASE_URL")
+    if not db_url:
+        return pd.DataFrame()
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url, connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT to_regclass('station_obs_extra') IS NOT NULL")
+                has_extra = bool(cur.fetchone()[0])
+                extra_join = ("LEFT JOIN station_obs_extra x ON x.station_id = t.station_id "
+                              "AND x.valid_utc = t.forecast_valid_time") if has_extra else ""
+                extra_cols = (", x.wind_spd_kt, x.wind_gust_kt, x.sky_cover, x.pressure_hpa, x.wx_codes"
+                              if has_extra else ", NULL, NULL, NULL, NULL, NULL")
+                cur.execute(f"""
+                    SELECT t.forecast_valid_time, t.observed_value_c, d.observed_value_c{extra_cols}
+                    FROM forecast_obs_pairs t
+                    LEFT JOIN forecast_obs_pairs d ON d.station_id = t.station_id AND d.metric = 'td2m'
+                         AND d.forecast_valid_time = t.forecast_valid_time
+                    {extra_join}
+                    WHERE t.station_id = %s AND t.metric = 't2m'
+                      AND t.forecast_valid_time >= NOW() - INTERVAL '72 hours'
+                    ORDER BY t.forecast_valid_time""", (station_id,))
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[assistant] obs fallback unavailable ({exc})")
+        return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows, columns=["valid_utc", "temp_c", "dewpoint_c", "wind_spd_kt",
+                                     "wind_gust_kt", "sky_cover", "pressure_hpa", "wx_codes"])
+    df["valid_utc"] = pd.to_datetime(df.valid_utc, utc=True)
+    for c in ("wind_spd_kt", "wind_gust_kt", "sky_cover", "pressure_hpa"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
 def _asst_obs72(station_id: str) -> pd.DataFrame:
-    """72 h of observations for drawing a station chart inside an answer,
-    cached ten minutes like the other assistant-side fetches."""
+    """72 h of observations for the assistant (charts and history), cached
+    ten minutes. IEM first; if that fails or returns nothing (it
+    rate-limits under bursts), fall back to the database copy."""
     import time as _time
     hit = _ASST_OBS72_CACHE.get(station_id)
     if hit and _time.monotonic() - hit[0] < _ASST_OBS_TTL_S:
@@ -2609,6 +2655,8 @@ def _asst_obs72(station_id: str) -> pd.DataFrame:
         obs = fetch_station_obs(station_id, hours=72)
     except Exception:
         obs = pd.DataFrame()
+    if obs.empty:
+        obs = _asst_obs72_from_db(station_id)
     _ASST_OBS72_CACHE[station_id] = (_time.monotonic(), obs)
     return obs
 
