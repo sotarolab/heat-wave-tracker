@@ -75,7 +75,7 @@ def _paired_recent(forecast_series: pd.Series, obs_df: pd.DataFrame,
 
 
 EXTRA_COLS = ["wind_spd_kt", "wind_gust_kt", "wind_dir_deg", "sky_cover", "ceiling_ft",
-              "pressure_hpa", "visibility_mi", "wx_codes"]
+              "pressure_hpa", "visibility_mi", "precip_in", "wx_codes"]
 
 
 def _extra_rows(station_id: str, obs_df: pd.DataFrame) -> list[tuple]:
@@ -180,17 +180,18 @@ def main() -> None:
                     valid_utc     timestamptz NOT NULL,
                     wind_spd_kt   real, wind_gust_kt real, wind_dir_deg real,
                     sky_cover     real, ceiling_ft   real,
-                    pressure_hpa  real, visibility_mi real,
+                    pressure_hpa  real, visibility_mi real, precip_in real,
                     wx_codes      text,
                     PRIMARY KEY (station_id, valid_utc)
                 )""")
+            cur.execute("ALTER TABLE station_obs_extra ADD COLUMN IF NOT EXISTS precip_in real")
             if extra:
                 inserted = psycopg2.extras.execute_values(
                     cur,
                     """
                     INSERT INTO station_obs_extra
                         (station_id, valid_utc, wind_spd_kt, wind_gust_kt, wind_dir_deg,
-                         sky_cover, ceiling_ft, pressure_hpa, visibility_mi, wx_codes)
+                         sky_cover, ceiling_ft, pressure_hpa, visibility_mi, precip_in, wx_codes)
                     VALUES %s
                     ON CONFLICT (station_id, valid_utc) DO NOTHING
                     RETURNING 1

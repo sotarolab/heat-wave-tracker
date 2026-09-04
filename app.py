@@ -1870,6 +1870,50 @@ def _conditions_line(asos_df: pd.DataFrame, tz) -> html.Div:
                     style={"fontSize": "12px", "color": "#94a3b8", "margin": "6px 0 2px 0"})
 
 
+def _conditions_figure(asos_df: pd.DataFrame, tz) -> go.Figure | None:
+    """Observed conditions over the fetched window as four small stacked
+    panels on one time axis: wind and gusts, sky cover, pressure, hourly
+    precipitation. None if the frame lacks the observed regime columns."""
+    from plotly.subplots import make_subplots
+    if asos_df is None or asos_df.empty or "sky_cover" not in asos_df:
+        return None
+    df = asos_df.sort_values("valid_utc")
+    x = df.valid_utc.dt.tz_convert(tz)
+    fig = make_subplots(rows=4, cols=1, shared_xaxes=True, vertical_spacing=0.06,
+                        subplot_titles=("Wind (kt)", "Sky cover", "Pressure (hPa)", "Precipitation (in/h)"))
+    fig.add_trace(go.Scatter(x=x, y=df.wind_spd_kt, mode="lines", name="wind",
+                             line=dict(color="#60a5fa", width=1.5)), row=1, col=1)
+    if "wind_gust_kt" in df and df.wind_gust_kt.notna().any():
+        fig.add_trace(go.Scatter(x=x, y=df.wind_gust_kt, mode="markers", name="gust",
+                                 marker=dict(color="#f87171", size=5)), row=1, col=1)
+    fig.add_trace(go.Bar(x=x, y=df.sky_cover, name="sky cover", marker_color="#94a3b8",
+                         opacity=0.8), row=2, col=1)
+    fig.add_trace(go.Scatter(x=x, y=df.pressure_hpa, mode="lines", name="pressure",
+                             line=dict(color="#fbbf24", width=1.5)), row=3, col=1)
+    pr = df.precip_in if "precip_in" in df else pd.Series(index=df.index, dtype=float)
+    fig.add_trace(go.Bar(x=x, y=pr.fillna(0.0), name="precip", marker_color="#34d399"), row=4, col=1)
+    fig.update_yaxes(range=[0, 1.05], tickvals=[0, 0.5, 1], ticktext=["clear", "half", "overcast"], row=2, col=1)
+    fig.update_layout(height=520, showlegend=False, paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG,
+                      font=dict(color=_PANEL_FONT, size=11), margin=dict(l=44, r=10, t=30, b=30))
+    fig.update_xaxes(gridcolor=_PANEL_GRID); fig.update_yaxes(gridcolor=_PANEL_GRID)
+    for a in fig.layout.annotations:
+        a.font.size = 11; a.font.color = "#94a3b8"; a.x = 0.0; a.xanchor = "left"
+    return fig
+
+
+def _conditions_expander(asos_df: pd.DataFrame, tz) -> html.Details:
+    fig = _conditions_figure(asos_df, tz)
+    if fig is None:
+        return html.Details(style={"display": "none"})
+    return html.Details([
+        html.Summary("Observed conditions, last 72 h: wind, sky, pressure, precipitation",
+                     style={"fontSize": "12px", "color": "#94a3b8", "cursor": "pointer"}),
+        html.Div(dcc.Graph(figure=fig, config={"displayModeBar": False}),
+                 style={"padding": "8px 4px 2px 4px"}),
+    ], style={"backgroundColor": "#1e293b", "borderRadius": "8px", "padding": "10px 12px",
+              "marginBottom": "8px", "border": "1px solid #334155"})
+
+
 def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame) -> html.Div:
     """Single "Feels Like" headline card, ahead of the line charts.
 
@@ -3819,6 +3863,9 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
         html.Div("Feels Like (Heat Index) - temperature plus humidity load",
                  style={"fontSize": "11px", "color": "#64748b", "margin": "8px 0 0 4px"}),
         dcc.Graph(figure=fig_feels_like, config={"displayModeBar": False}),
+        # Observed regime variables live in a collapsed pane: one click away,
+        # never in the default view.
+        _conditions_expander(asos_df, ZoneInfo(stn.get("tz", "America/New_York"))),
     ])
     panel_verification = html.Div(verification_children)
     return (panel_headline, panel_analysis, panel_charts, panel_verification,

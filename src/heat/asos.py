@@ -56,7 +56,7 @@ def _f_to_c(series: pd.Series) -> pd.Series:
 # needs: calm + clear nights are where the model's nocturnal warm bias
 # lives, and sky cover is invisible to the forecast pairing otherwise.
 IEM_FIELDS = ["tmpf", "dwpf", "relh", "sknt",
-              "gust", "drct", "mslp", "alti", "vsby",
+              "gust", "drct", "mslp", "alti", "vsby", "p01i",
               "skyc1", "skyc2", "skyc3", "skyc4", "skyl1", "skyl2", "skyl3", "skyl4",
               "wxcodes"]
 
@@ -97,6 +97,10 @@ def parse_iem_csv(text: str) -> pd.DataFrame:
     mslp = _num(df, "mslp"); alti = _num(df, "alti") * 33.8639
     out["pressure_hpa"] = mslp.where(mslp.notna(), alti)
     out["visibility_mi"] = _num(df, "vsby")
+    # Hourly precipitation, inches. IEM reports trace as "T"; count it as
+    # 0.005 in so a trace shows as a sliver rather than vanishing.
+    p01 = df.get("p01i", pd.Series(index=df.index, dtype=object)).astype(str).str.strip()
+    out["precip_in"] = pd.to_numeric(p01.where(p01 != "T", "0.005"), errors="coerce")
 
     layers = [df.get(f"skyc{i}", pd.Series(index=df.index, dtype=object)).astype(str).str.strip().str.upper()
               for i in range(1, 5)]

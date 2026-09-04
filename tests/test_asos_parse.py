@@ -42,3 +42,13 @@ def test_wx_codes_missing_is_none():
 def test_empty_and_headerless():
     assert parse_iem_csv("").empty
     assert parse_iem_csv("station,foo\nDCA,1").empty
+
+
+def test_precip_trace_and_values():
+    csv = ("station,valid,tmpf,dwpf,p01i\n"
+           "DCA,2026-09-03 21:52,90.0,70.0,T\n"
+           "DCA,2026-09-03 22:52,89.0,70.0,0.12\n"
+           "DCA,2026-09-03 23:52,88.0,70.0,M\n")
+    df = parse_iem_csv(csv)
+    assert df.precip_in.iloc[0] == 0.005 and df.precip_in.iloc[1] == 0.12
+    assert math.isnan(df.precip_in.iloc[2])
