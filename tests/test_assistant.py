@@ -152,7 +152,11 @@ class TestFastPaths:
             verification=lambda: {"model_version": "v", "window": "w", "scored_station_hours": 10,
                                   "rmse_f": {"raw_gfs": 3.87, "per_station_offset_baseline": 3.62,
                                              "learned_correction": 2.92}, "band95_observed_coverage": 0.94},
-            safety_table=lambda: {})
+            safety_table=lambda: {"categories": [
+                {"min_heat_index_f": 80, "category": "Caution", "description": "Fatigue possible."},
+                {"min_heat_index_f": 90, "category": "Extreme Caution", "description": "Heat cramps possible."},
+                {"min_heat_index_f": 103, "category": "Danger", "description": "Heat stroke possible."}],
+                "below_first_threshold": "Comfortable."})
         monkeypatch.setattr(assistant, "_provider", prov)
 
     def test_every_chip_renders_without_model(self, monkeypatch):

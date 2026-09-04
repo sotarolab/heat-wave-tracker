@@ -601,14 +601,18 @@ def render_daily_peaks(station_id: str) -> dict:
 
 # ── chip fast paths: no model call, deterministic text, instant ─────────────
 
+# Ordered: the first four for everyone, the last three for forecasters.
 FAST_PATHS = {
     "Where is it hottest right now?": lambda: _fast_current(),
-    "Where will it be hottest tomorrow?": lambda: _fast_hottest("tomorrow"),
-    "Compare the next 48 hours for DC and Baltimore": lambda: _fast_compare(["KDCA", "KBWI"]),
-    "How many more days does the heat last in Omaha?": lambda: _fast_peaks("KOMA"),
-    "Show me the forecast for Denver": lambda: _fast_station("KDEN"),
+    "Where will it be hottest today?": lambda: _fast_hottest("today"),
+    "When does the heat break in Washington DC?": lambda: _fast_peaks("KDCA"),
+    "Is it safe to exercise outside in Phoenix today?": lambda: _fast_safety("KPHX"),
+    "Compare DC and Baltimore for the next 48 hours": lambda: _fast_compare(["KDCA", "KBWI"]),
     "How accurate has the corrected forecast been?": lambda: _fast_verification(),
+    "Show me the corrected forecast for Denver": lambda: _fast_station("KDEN"),
 }
+GENERAL_CHIPS = list(FAST_PATHS)[:4]
+FORECASTER_CHIPS = list(FAST_PATHS)[4:]
 
 
 def _fast_result(answer: str, tools: list) -> dict:
@@ -671,6 +675,26 @@ def _fast_station(sid):
     _capture("station_chart", {"station_id": sid})
     return _fast_result(f"{sid}: observations, raw GFS, and the learned model's corrected line with "
                         f"its 80% band for the next two days.", ["station_forecast"])
+
+
+def _fast_safety(sid):
+    d = _p().when_it_breaks(sid)
+    if "error" in d or not d.get("daily_peaks"):
+        return _fast_result("No forecast available for that station.", ["heat_safety_guidance"])
+    today = d["daily_peaks"][0]
+    table = _p().safety_table()
+    desc = next((c["description"] for c in table["categories"] if c["category"] == today["category"]),
+                table.get("below_first_threshold", ""))
+    rows = [[f"{c['min_heat_index_f']:.0f}°F and above", c["category"], c["description"]]
+            for c in table["categories"]]
+    _capture("table", {"title": "NWS heat index categories (weather.gov/safety/heat-index)",
+                       "columns": ["Heat index", "Category", "What NWS says"], "rows": rows})
+    return _fast_result(
+        f"{d['name']} ({sid}) today: forecast peak heat index {today['peak_heat_index_f']:.0f}°F, "
+        f"NWS category {today['category']}. NWS guidance for that category: \"{desc}\" "
+        f"People with health conditions, children, and older adults should follow local health "
+        f"guidance; see weather.gov/heat. This is the raw GFS heat index, not medical advice.",
+        ["when_it_breaks", "heat_safety_guidance"])
 
 
 def _fast_verification():

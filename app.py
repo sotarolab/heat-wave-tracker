@@ -2837,12 +2837,9 @@ _ASSISTANT_ON = _assistant.available()
 print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
 
 
-# Example chips. The first six have deterministic fast paths (no model
-# call, instant); the last is a free-text question so the chips also show
-# what typing a question does.
-_ASSISTANT_EXAMPLES = list(_assistant.FAST_PATHS) + [
-    "Is it safe to exercise outside in Phoenix today?",
-]
+# Example chips: every one is a deterministic fast path (no model call,
+# instant, no budget). Two labelled rows: for everyone, for forecasters.
+_ASSISTANT_EXAMPLES = list(_assistant.FAST_PATHS)
 
 _PANEL_STYLE = {"position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "440px",
                 "maxWidth": "100vw", "zIndex": 999, "overflowY": "auto", "padding": "14px 16px",
@@ -3243,13 +3240,18 @@ app.layout = html.Div(
                                    "border": "1px solid #7c3aed", "backgroundColor": "#6d28d9",
                                    "color": "white", "cursor": "pointer"}),
             ]),
-            html.Div(style={"display": "flex", "gap": "5px", "flexWrap": "wrap", "marginTop": "6px"},
-                     children=[html.Button(q, id={"type": "assistant-example", "index": i}, n_clicks=0,
-                                           style={"fontSize": "10px", "padding": "3px 8px",
-                                                  "borderRadius": "10px", "border": "1px solid #334155",
-                                                  "backgroundColor": "#1e293b", "color": "#cbd5e1",
-                                                  "cursor": "pointer"})
-                               for i, q in enumerate(_ASSISTANT_EXAMPLES)]),
+            *[html.Div([
+                html.Div(label, style={"fontSize": "10px", "color": "#64748b", "margin": "8px 0 3px"}),
+                html.Div(style={"display": "flex", "gap": "5px", "flexWrap": "wrap"},
+                         children=[html.Button(q, id={"type": "assistant-example",
+                                                      "index": _ASSISTANT_EXAMPLES.index(q)}, n_clicks=0,
+                                               style={"fontSize": "10px", "padding": "3px 8px",
+                                                      "borderRadius": "10px", "border": "1px solid #334155",
+                                                      "backgroundColor": "#1e293b", "color": "#cbd5e1",
+                                                      "cursor": "pointer"})
+                                   for q in chips]),
+              ]) for label, chips in (("For everyone", _assistant.GENERAL_CHIPS),
+                                      ("For forecasters", _assistant.FORECASTER_CHIPS))],
             dcc.Loading(html.Div(id="assistant-busy"), type="dot", color="#a855f7"),
         ]),
         dcc.Store(id="current-time-idx"),
