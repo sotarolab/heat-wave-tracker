@@ -2595,6 +2595,24 @@ _ASST_OBS_CACHE: dict = {}
 _ASST_OBS_TTL_S = 600
 
 
+_ASST_OBS72_CACHE: dict = {}
+
+
+def _asst_obs72(station_id: str) -> pd.DataFrame:
+    """72 h of observations for drawing a station chart inside an answer,
+    cached ten minutes like the other assistant-side fetches."""
+    import time as _time
+    hit = _ASST_OBS72_CACHE.get(station_id)
+    if hit and _time.monotonic() - hit[0] < _ASST_OBS_TTL_S:
+        return hit[1]
+    try:
+        obs = fetch_station_obs(station_id, hours=72)
+    except Exception:
+        obs = pd.DataFrame()
+    _ASST_OBS72_CACHE[station_id] = (_time.monotonic(), obs)
+    return obs
+
+
 def _asst_latest_obs(station_id: str, tz) -> dict | None:
     import time as _time
     hit = _ASST_OBS_CACHE.get(station_id)
@@ -2819,13 +2837,11 @@ _ASSISTANT_ON = _assistant.available()
 print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
 
 
-_ASSISTANT_EXAMPLES = [
-    "Where is it hottest right now?",
-    "How hot will it get in Washington DC tomorrow, and when?",
-    "Compare the next 48 hours for DCA and BWI",
-    "How many more days does the heat last in Omaha?",
-    "How accurate has the corrected forecast been?",
-    "Is it safe to run outside in Phoenix this afternoon?",
+# Example chips. The first six have deterministic fast paths (no model
+# call, instant); the last is a free-text question so the chips also show
+# what typing a question does.
+_ASSISTANT_EXAMPLES = list(_assistant.FAST_PATHS) + [
+    "Is it safe to exercise outside in Phoenix today?",
 ]
 
 _PANEL_STYLE = {"position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "440px",
@@ -2871,10 +2887,7 @@ def _render_assistant(result: dict, unit: str) -> list:
         elif r["kind"] == "station_chart":
             sid = r["station_id"]
             if get_station(sid) is not None:
-                try:
-                    obs = fetch_station_obs(sid, hours=72)
-                except Exception:
-                    obs = pd.DataFrame()
+                obs = _asst_obs72(sid)
                 fig, _ = _build_station_figure(sid, obs, 0, unit=unit, metrics=["t2m"],
                                                display_mode="ml")
                 children.append(dcc.Graph(figure=fig, config={"displayModeBar": False}))
@@ -3724,11 +3737,12 @@ def ask_assistant(_n, _submit, _example_clicks, _reset, question, unit, history)
                        question, history or [], no_update)
     fwd = request.headers.get("x-forwarded-for", "")
     key = fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
-    reason = _assistant.check_rate_limit(key) or _assistant.reserve_question()
+    is_fast = _assistant.FAST_PATHS.get(question.strip()) is not None
+    reason = _assistant.check_rate_limit(key) or (None if is_fast else _assistant.reserve_question())
     if reason:
         return err(reason)
     try:
-        result = _assistant.ask(question.strip(), history=history or [])
+        result = _assistant.fast_path(question) or _assistant.ask(question.strip(), history=history or [])
     except Exception as exc:
         print(f"[assistant] failed: {exc}")
         return err("Sol is unavailable right now.")

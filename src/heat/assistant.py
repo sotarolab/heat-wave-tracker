@@ -66,10 +66,12 @@ and call it an 80% band.
 
 ## Show data as tables and charts
 
-When an answer involves more than three numbers, or a comparison across stations or hours, call
-show_table or show_chart with the values you obtained from the data tools, and keep the prose to a
-short summary. To show a station's full forecast picture, call show_station_forecast. Never put a
-number in a table or chart that did not come from a tool result.
+Prefer the render-ready tools, which fetch and draw in one call: chart_station_comparison for
+comparing stations, table_current_conditions for right-now rankings, table_hottest_day for a day's
+peaks, table_daily_peaks for a station's day-by-day outlook, show_station_forecast for one
+station's full picture. After one of these, write two or three sentences of summary; the table or
+chart is already on screen, so do not repeat its rows. Use show_table or show_chart only for a
+shape those tools do not cover, and only with numbers a data tool returned.
 
 ## Heat safety: quote, do not reason
 
@@ -238,6 +240,40 @@ def _build_tools():
         """
         return _dumps(_p().safety_table())
 
+    # Render-ready composites: fetch AND draw in one call, returning a short
+    # summary for the model to narrate. Cheaper and faster than the model
+    # fetching data and re-typing every number into show_chart/show_table.
+
+    @beta_tool
+    def chart_station_comparison(station_ids: list[str], hours_ahead: int = 48) -> str:
+        """Draw a temperature chart comparing 2 to 6 stations over the next hours: raw GFS and,
+        where the model has coverage, the corrected forecast for each. Use this for any request to
+        compare, plot, or chart more than one station. Returns a short summary to describe.
+        """
+        return _dumps(render_station_comparison([str(x) for x in station_ids][:6], int(hours_ahead)))
+
+    @beta_tool
+    def table_current_conditions(limit: int = 10) -> str:
+        """Draw the table of the hottest OBSERVED conditions right now (temperature, heat index,
+        observation time) and return a summary. Use for "where is it hottest right now".
+        """
+        return _dumps(render_current_conditions(int(limit)))
+
+    @beta_tool
+    def table_hottest_day(day: str = "today", limit: int = 10) -> str:
+        """Draw the table of the highest forecast peak heat index for a day ("today", "tomorrow",
+        or a date) and return a summary. Use for "where will it be hottest today/tomorrow".
+        """
+        return _dumps(render_hottest_day(day, int(limit)))
+
+    @beta_tool
+    def table_daily_peaks(station_id: str) -> str:
+        """Draw a station's day-by-day forecast peak heat index with NWS category, and return
+        the first day it drops below Extreme Caution. Use for "how long", "when does it break",
+        "which day is the peak".
+        """
+        return _dumps(render_daily_peaks(station_id))
+
     @beta_tool
     def show_table(title: str, columns: list[str], rows: list[list[str]]) -> str:
         """Render a table in the answer. `columns` are header labels; each row is a list of cell
@@ -272,7 +308,8 @@ def _build_tools():
         return _capture("station_chart", {"station_id": station_id})
 
     return [find_stations, station_forecast, compare_stations, hottest_stations, current_conditions,
-            heat_streak, when_it_breaks,
+            heat_streak, when_it_breaks, chart_station_comparison, table_current_conditions,
+            table_hottest_day, table_daily_peaks,
             verification_summary, heat_safety_guidance, show_table, show_chart,
             show_station_forecast]
 
@@ -496,3 +533,172 @@ def record_spend(usage: dict, now_day: str | None = None) -> None:
 def spend_exhausted(now_day: str | None = None) -> bool:
     day = now_day or time.strftime("%Y-%m-%d")
     return _spend["day"] == day and _spend["tokens"] >= TOKENS_PER_DAY
+
+
+# ── render builders: shared by the composite tools and the chip fast paths ──
+# Each fetches from the provider, captures a render spec, and returns a small
+# summary dict. Deterministic: the same question always draws the same thing.
+
+def render_station_comparison(station_ids: list, hours_ahead: int = 48) -> dict:
+    d = _p().compare_stations(station_ids, hours_ahead)
+    if "error" in d:
+        return d
+    series = []
+    for sid, st in d["stations"].items():
+        series.append({"name": f"{st['name']} raw", "y": st["raw_f"]})
+        if any(v is not None for v in st["corrected_f"]):
+            series.append({"name": f"{st['name']} corrected", "y": st["corrected_f"]})
+    _capture("chart", {"title": f"Temperature, next {hours_ahead} h ({d['time_zone']})",
+                       "chart_type": "line", "x": d["times_local"], "series": series[:6],
+                       "y_label": "°F"})
+    peaks = {sid: max(v for v in st["raw_f"] if v is not None) for sid, st in d["stations"].items()}
+    return {"drawn": "chart", "stations": {sid: st["name"] for sid, st in d["stations"].items()},
+            "raw_peak_f": peaks, "unknown": d.get("unknown", []),
+            "note": "corrected series shown where the model has coverage"}
+
+
+def render_current_conditions(limit: int = 10) -> dict:
+    d = _p().current_conditions(limit)
+    if "error" in d:
+        return d
+    rows = [[f"{r['name']} ({r['station_id']})", f"{r['temp_f']:.0f}",
+             f"{r['heat_index_f']:.0f}" if r.get("heat_index_f") is not None else "-",
+             r["observed_local"]] for r in d["hottest"]]
+    _capture("table", {"title": "Hottest observations right now",
+                       "columns": ["Station", "Temp °F", "Heat index °F", "Observed (local)"],
+                       "rows": rows})
+    top = d["hottest"][0] if d["hottest"] else None
+    return {"drawn": "table", "as_of_utc": d["as_of_utc"], "stations_reporting": d["stations_reporting"],
+            "stations_total": d.get("stations_total"), "hottest": top, "note": d["note"]}
+
+
+def render_hottest_day(day: str = "today", limit: int = 10) -> dict:
+    d = _p().hottest_stations(day, limit)
+    if "error" in d:
+        return d
+    rows = [[f"{r['name']} ({r['station_id']})", f"{r['peak_heat_index_f']:.0f}",
+             r["peak_time_et"], r["category"]] for r in d["stations"]]
+    _capture("table", {"title": f"Highest forecast peak heat index, {d['day']}",
+                       "columns": ["Station", "Peak heat index °F", "Peak time (ET)", "NWS category"],
+                       "rows": rows})
+    top = d["stations"][0] if d["stations"] else None
+    return {"drawn": "table", "day": d["day"], "hottest": top,
+            "categories": sorted({r["category"] for r in d["stations"]})}
+
+
+def render_daily_peaks(station_id: str) -> dict:
+    d = _p().when_it_breaks(station_id)
+    if "error" in d:
+        return d
+    rows = [[r["date"], f"{r['peak_heat_index_f']:.0f}", r["category"]] for r in d["daily_peaks"]]
+    _capture("table", {"title": f"{d['name']} ({station_id}): forecast peak heat index by day",
+                       "columns": ["Day", "Peak heat index °F", "NWS category"], "rows": rows})
+    streak = _p().heat_streak(station_id)
+    return {"drawn": "table", "station": d["name"],
+            "first_day_below_extreme_caution": d["first_day_below_extreme_caution"],
+            "streak": streak, "note": d["note"]}
+
+
+# ── chip fast paths: no model call, deterministic text, instant ─────────────
+
+FAST_PATHS = {
+    "Where is it hottest right now?": lambda: _fast_current(),
+    "Where will it be hottest tomorrow?": lambda: _fast_hottest("tomorrow"),
+    "Compare the next 48 hours for DC and Baltimore": lambda: _fast_compare(["KDCA", "KBWI"]),
+    "How many more days does the heat last in Omaha?": lambda: _fast_peaks("KOMA"),
+    "Show me the forecast for Denver": lambda: _fast_station("KDEN"),
+    "How accurate has the corrected forecast been?": lambda: _fast_verification(),
+}
+
+
+def _fast_result(answer: str, tools: list) -> dict:
+    return {"answer": answer, "tools_used": tools, "renders": list(_renders.get()),
+            "usage": {"input_tokens": 0, "cache_read_input_tokens": 0, "output_tokens": 0,
+                      "iterations": 0, "seconds": 0.0, "fast_path": True}}
+
+
+def _fast_current():
+    d = render_current_conditions(10)
+    if "error" in d:
+        return _fast_result("No current observations are available right now.", ["current_conditions"])
+    t = d["hottest"]
+    cov = (f" Only {d['stations_reporting']} of {d['stations_total']} stations reported, so the ranking is partial."
+           if d.get("stations_total") and d["stations_reporting"] < d["stations_total"] else "")
+    return _fast_result(
+        f"Hottest observation right now: {t['name']} ({t['station_id']}) at {t['temp_f']:.0f}°F, "
+        f"observed {t['observed_local']} local. Latest routine report per station.{cov}",
+        ["current_conditions"])
+
+
+def _fast_hottest(day):
+    d = render_hottest_day(day, 10)
+    if "error" in d:
+        return _fast_result(d.get("error", "No forecast available."), ["hottest_stations"])
+    t = d["hottest"]
+    return _fast_result(
+        f"Highest forecast peak heat index {d['day']}: {t['name']} ({t['station_id']}) at "
+        f"{t['peak_heat_index_f']:.0f}°F around {t['peak_time_et']}, NWS {t['category']}. "
+        f"Peak feels-like values for the day, from the raw GFS forecast.", ["hottest_stations"])
+
+
+def _fast_compare(ids):
+    d = render_station_comparison(ids, 48)
+    if "error" in d:
+        return _fast_result(d["error"], ["compare_stations"])
+    parts = [f"{d['stations'][sid]} raw peak {d['raw_peak_f'][sid]:.0f}°F" for sid in d["stations"]]
+    return _fast_result("Next 48 hours, station-local time: " + "; ".join(parts) +
+                        ". Solid lines are raw GFS; corrected lines are the learned model where it has coverage.",
+                        ["compare_stations"])
+
+
+def _fast_peaks(sid):
+    d = render_daily_peaks(sid)
+    if "error" in d:
+        return _fast_result(d["error"], ["when_it_breaks"])
+    st = d.get("streak") or {}
+    brk = d["first_day_below_extreme_caution"]
+    streak_txt = (f"{st['streak_days']} consecutive forecast days at or above {st['category']}. "
+                  if st.get("streak_days") else "")
+    brk_txt = f"First day with a peak below Extreme Caution (90°F): {brk}." if brk else \
+              "No day in the forecast window drops below Extreme Caution."
+    return _fast_result(f"{d['station']}: {streak_txt}{brk_txt} {d['note']}.",
+                        ["when_it_breaks", "heat_streak"])
+
+
+def _fast_station(sid):
+    # The station chart itself fetches and shows the observations; no
+    # second fetch here, which kept this path slow when IEM was slow.
+    _capture("station_chart", {"station_id": sid})
+    return _fast_result(f"{sid}: observations, raw GFS, and the learned model's corrected line with "
+                        f"its 80% band for the next two days.", ["station_forecast"])
+
+
+def _fast_verification():
+    v = _p().verification()
+    if "error" in v:
+        return _fast_result("No scored rows yet.", ["verification_summary"])
+    r = v["rmse_f"]
+    _capture("table", {"title": f"Live verification, {v['window']} ({v['scored_station_hours']:,} station-hours)",
+                       "columns": ["Forecast", "RMSE °F"],
+                       "rows": [["Raw GFS", f"{r['raw_gfs']:.2f}"],
+                                ["Per-station offset baseline", f"{r['per_station_offset_baseline']:.2f}"],
+                                [f"Learned correction ({v['model_version']})", f"{r['learned_correction']:.2f}"]]})
+    cov = v.get("band95_observed_coverage")
+    cov_txt = f" The 95% band has covered {100*cov:.0f}% of observations." if cov is not None else ""
+    return _fast_result(f"Scored live against observations that arrived after training, leads up to 8 h: "
+                        f"raw GFS {r['raw_gfs']:.2f}°F RMSE, baseline {r['per_station_offset_baseline']:.2f}°F, "
+                        f"learned correction {r['learned_correction']:.2f}°F.{cov_txt}",
+                        ["verification_summary"])
+
+
+def fast_path(question: str) -> dict | None:
+    """Deterministic answer for an example chip, or None if the question
+    is not one. Runs inside a fresh render context, no model call."""
+    fn = FAST_PATHS.get(question.strip())
+    if fn is None:
+        return None
+    token = _renders.set([])
+    try:
+        return fn()
+    finally:
+        _renders.reset(token)

@@ -125,3 +125,49 @@ class TestScopeAndBudgetFallback:
 
     def test_off_topic_reply_is_fixed_text(self):
         assert "heat forecast" in assistant.OFF_TOPIC_REPLY
+
+
+class TestFastPaths:
+    """Chip answers are deterministic and never touch the model."""
+
+    def _fake(self, monkeypatch):
+        prov = assistant.Provider(
+            find_stations=lambda q: [],
+            station_forecast=lambda sid, h: {"name": "X", "hours": [], "latest_observation": None},
+            hottest_stations=lambda day, n: {"day": "2026-09-04", "stations": [
+                {"station_id": "KMEM", "name": "Memphis TN", "peak_heat_index_f": 107.1,
+                 "peak_time_et": "02:00 PM EDT", "category": "Danger"}]},
+            compare_stations=lambda ids, h: {"time_zone": "UTC", "times_local": ["t1", "t2"],
+                                             "stations": {"KDCA": {"name": "DC", "raw_f": [90.0, 91.0],
+                                                                   "corrected_f": [88.0, None]}}},
+            current_conditions=lambda n: {"as_of_utc": "x", "stations_reporting": 1, "stations_total": 165,
+                                          "hottest": [{"station_id": "KPHX", "name": "Phoenix AZ",
+                                                       "temp_f": 95.0, "heat_index_f": 96.0,
+                                                       "observed_local": "Thu 06:51 PM"}],
+                                          "note": "n"},
+            heat_streak=lambda sid: {"streak_days": 3, "category": "Danger"},
+            when_it_breaks=lambda sid: {"name": "Omaha NE", "first_day_below_extreme_caution": "2026-09-07",
+                                        "daily_peaks": [{"date": "2026-09-04", "peak_heat_index_f": 105.0,
+                                                         "category": "Danger"}], "note": "raw"},
+            verification=lambda: {"model_version": "v", "window": "w", "scored_station_hours": 10,
+                                  "rmse_f": {"raw_gfs": 3.87, "per_station_offset_baseline": 3.62,
+                                             "learned_correction": 2.92}, "band95_observed_coverage": 0.94},
+            safety_table=lambda: {})
+        monkeypatch.setattr(assistant, "_provider", prov)
+
+    def test_every_chip_renders_without_model(self, monkeypatch):
+        self._fake(monkeypatch)
+        for q in assistant.FAST_PATHS:
+            r = assistant.fast_path(q)
+            assert r is not None and r["usage"]["fast_path"] is True
+            assert r["renders"], q
+            assert r["answer"]
+
+    def test_non_chip_returns_none(self, monkeypatch):
+        self._fake(monkeypatch)
+        assert assistant.fast_path("something typed by hand") is None
+
+    def test_partial_coverage_is_stated(self, monkeypatch):
+        self._fake(monkeypatch)
+        r = assistant.fast_path("Where is it hottest right now?")
+        assert "1 of 165" in r["answer"]
