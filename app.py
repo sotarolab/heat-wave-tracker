@@ -1818,6 +1818,58 @@ def _hero_card(number_text: str, sub_label: str, border_color: str,
     })
 
 
+_WIND_DIRS = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+              "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"]
+
+
+def _sky_words(frac: float) -> str:
+    if frac <= 0.05:
+        return "clear"
+    if frac <= 0.3:
+        return "a few clouds"
+    if frac <= 0.6:
+        return "partly cloudy"
+    if frac <= 0.9:
+        return "mostly cloudy"
+    return "overcast"
+
+
+def _conditions_line(asos_df: pd.DataFrame, tz) -> html.Div:
+    """One line of the latest observed conditions beyond temperature:
+    wind, gusts, sky, ceiling, pressure, visibility, present weather.
+    These are the observed gates of the model's nocturnal warm bias
+    (calm, clear, dry), shown as plain words. Empty if unavailable."""
+    if asos_df is None or asos_df.empty or "wind_spd_kt" not in asos_df:
+        return html.Div()
+    last = asos_df.sort_values("valid_utc").iloc[-1]
+    def ok(v):
+        return v is not None and not (isinstance(v, float) and v != v)
+    parts = []
+    if ok(last.wind_spd_kt):
+        w = f"wind {int(round(last.wind_spd_kt))} kt"
+        if ok(getattr(last, "wind_dir_deg", None)) and last.wind_spd_kt > 0:
+            w = f"wind {_WIND_DIRS[int((last.wind_dir_deg + 11.25) // 22.5) % 16]} {int(round(last.wind_spd_kt))} kt"
+        if ok(getattr(last, "wind_gust_kt", None)):
+            w += f" gusting {int(round(last.wind_gust_kt))}"
+        parts.append("calm" if last.wind_spd_kt == 0 else w)
+    if ok(getattr(last, "sky_cover", None)):
+        sky = _sky_words(float(last.sky_cover))
+        if ok(getattr(last, "ceiling_ft", None)):
+            sky += f", ceiling {int(last.ceiling_ft):,} ft"
+        parts.append(sky)
+    if ok(getattr(last, "pressure_hpa", None)):
+        parts.append(f"{last.pressure_hpa:.1f} hPa")
+    if ok(getattr(last, "visibility_mi", None)) and last.visibility_mi < 10:
+        parts.append(f"visibility {last.visibility_mi:g} mi")
+    if ok(getattr(last, "wx_codes", None)) and str(last.wx_codes) not in ("None", "nan", ""):
+        parts.append(str(last.wx_codes))
+    if not parts:
+        return html.Div()
+    when = last.valid_utc.tz_convert(tz).strftime("%I:%M %p").lstrip("0")
+    return html.Div(f"Conditions at {when}: " + " · ".join(parts),
+                    style={"fontSize": "12px", "color": "#94a3b8", "margin": "6px 0 2px 0"})
+
+
 def _hero_tile(station_id: str, time_idx: int, unit: str, asos_df: pd.DataFrame) -> html.Div:
     """Single "Feels Like" headline card, ahead of the line charts.
 
@@ -2598,9 +2650,55 @@ _ASST_OBS_TTL_S = 600
 _ASST_OBS72_CACHE: dict = {}
 
 
+def _asst_obs72_from_db(station_id: str) -> pd.DataFrame:
+    """Fallback observation history from the database when IEM is slow or
+    rate-limiting: observed t2m/td2m from forecast_obs_pairs (logged every
+    cycle), joined to the regime variables in station_obs_extra where
+    present. Current to the last workflow run rather than to the minute,
+    which the answer's timestamps make visible."""
+    db_url = os.environ.get("NEON_DATABASE_URL")
+    if not db_url:
+        return pd.DataFrame()
+    try:
+        import psycopg2
+        conn = psycopg2.connect(db_url, connect_timeout=10)
+        try:
+            with conn.cursor() as cur:
+                cur.execute("SELECT to_regclass('station_obs_extra') IS NOT NULL")
+                has_extra = bool(cur.fetchone()[0])
+                extra_join = ("LEFT JOIN station_obs_extra x ON x.station_id = t.station_id "
+                              "AND x.valid_utc = t.forecast_valid_time") if has_extra else ""
+                extra_cols = (", x.wind_spd_kt, x.wind_gust_kt, x.sky_cover, x.pressure_hpa, x.wx_codes"
+                              if has_extra else ", NULL, NULL, NULL, NULL, NULL")
+                cur.execute(f"""
+                    SELECT t.forecast_valid_time, t.observed_value_c, d.observed_value_c{extra_cols}
+                    FROM forecast_obs_pairs t
+                    LEFT JOIN forecast_obs_pairs d ON d.station_id = t.station_id AND d.metric = 'td2m'
+                         AND d.forecast_valid_time = t.forecast_valid_time
+                    {extra_join}
+                    WHERE t.station_id = %s AND t.metric = 't2m'
+                      AND t.forecast_valid_time >= NOW() - INTERVAL '72 hours'
+                    ORDER BY t.forecast_valid_time""", (station_id,))
+                rows = cur.fetchall()
+        finally:
+            conn.close()
+    except Exception as exc:
+        print(f"[assistant] obs fallback unavailable ({exc})")
+        return pd.DataFrame()
+    if not rows:
+        return pd.DataFrame()
+    df = pd.DataFrame(rows, columns=["valid_utc", "temp_c", "dewpoint_c", "wind_spd_kt",
+                                     "wind_gust_kt", "sky_cover", "pressure_hpa", "wx_codes"])
+    df["valid_utc"] = pd.to_datetime(df.valid_utc, utc=True)
+    for c in ("wind_spd_kt", "wind_gust_kt", "sky_cover", "pressure_hpa"):
+        df[c] = pd.to_numeric(df[c], errors="coerce")
+    return df
+
+
 def _asst_obs72(station_id: str) -> pd.DataFrame:
-    """72 h of observations for drawing a station chart inside an answer,
-    cached ten minutes like the other assistant-side fetches."""
+    """72 h of observations for the assistant (charts and history), cached
+    ten minutes. IEM first; if that fails or returns nothing (it
+    rate-limits under bursts), fall back to the database copy."""
     import time as _time
     hit = _ASST_OBS72_CACHE.get(station_id)
     if hit and _time.monotonic() - hit[0] < _ASST_OBS_TTL_S:
@@ -2609,6 +2707,8 @@ def _asst_obs72(station_id: str) -> pd.DataFrame:
         obs = fetch_station_obs(station_id, hours=72)
     except Exception:
         obs = pd.DataFrame()
+    if obs.empty:
+        obs = _asst_obs72_from_db(station_id)
     _ASST_OBS72_CACHE[station_id] = (_time.monotonic(), obs)
     return obs
 
@@ -2681,6 +2781,52 @@ def _asst_current_conditions(limit: int = 10) -> dict:
     return {"as_of_utc": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M"),
             "stations_reporting": len(rows), "stations_total": len(MAJOR_CONUS_STATIONS),
             "hottest": rows[:limit], "note": note}
+
+
+def _asst_station_observations(station_id: str, hours: int = 6) -> dict:
+    """Observed history at a station over the past `hours` (cached 72 h
+    fetch), with a plain summary of the temperature change."""
+    stn = get_station(station_id)
+    if stn is None:
+        return {"error": f"unknown station {station_id}"}
+    hours = max(1, min(int(hours), 72))
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    obs = _asst_obs72(station_id)
+    if obs.empty:
+        return {"error": f"no observations available for {station_id}"}
+    cutoff = pd.Timestamp.now(tz="UTC") - pd.Timedelta(hours=hours)
+    win = obs[obs.valid_utc >= cutoff].sort_values("valid_utc")
+    if len(win) < 2:
+        return {"error": f"fewer than two observations in the past {hours} h at {station_id}"}
+    def f(x):
+        return None if x is None or (isinstance(x, float) and x != x) else round(float(x) * 9 / 5 + 32, 1)
+    def g(row, col):
+        v = getattr(row, col, None)
+        return None if v is None or (isinstance(v, float) and v != v) else v
+    rows = []
+    for r in win.itertuples(index=False):
+        rows.append({"time_local": r.valid_utc.tz_convert(tz).strftime("%a %I:%M %p"),
+                     "temp_f": f(r.temp_c), "dewpoint_f": f(r.dewpoint_c),
+                     "wind_kt": g(r, "wind_spd_kt"), "gust_kt": g(r, "wind_gust_kt"),
+                     "sky_cover": g(r, "sky_cover"),
+                     "pressure_hpa": None if g(r, "pressure_hpa") is None else round(float(r.pressure_hpa), 1),
+                     "wx": g(r, "wx_codes")})
+    first, last = win.iloc[0], win.iloc[-1]
+    dt_h = max((last.valid_utc - first.valid_utc).total_seconds() / 3600.0, 0.5)
+    change = f(last.temp_c) - f(first.temp_c)
+    cond = []
+    if "sky_cover" in win and win["sky_cover"].notna().any():
+        m = win["sky_cover"].mean()
+        cond.append("mostly clear skies" if m < 0.3 else "mostly cloudy skies" if m > 0.7 else "partly cloudy skies")
+    if win["wind_spd_kt"].notna().any():
+        cond.append(f"winds averaging {win['wind_spd_kt'].mean():.0f} kt")
+    summary = {"start_time_local": rows[0]["time_local"], "end_time_local": rows[-1]["time_local"],
+               "start_temp_f": rows[0]["temp_f"], "end_temp_f": rows[-1]["temp_f"],
+               "change_f": round(change, 1), "rate_f_per_h": round(change / dt_h, 2),
+               "max_temp_f": max(r["temp_f"] for r in rows), "min_temp_f": min(r["temp_f"] for r in rows),
+               "conditions": ("Conditions: " + ", ".join(cond) + ".") if cond else ""}
+    return {"station_id": station_id, "name": stn["name"], "hours": hours, "rows": rows, "summary": summary,
+            "note": "routine hourly ASOS observations; sky cover 0 (clear) to 1 (overcast)"}
 
 
 def _asst_compare(station_ids: list, hours_ahead: int = 48) -> dict:
@@ -2832,7 +2978,8 @@ _assistant.configure(_assistant.Provider(
     hottest_stations=_asst_hottest, compare_stations=_asst_compare,
     current_conditions=_asst_current_conditions,
     heat_streak=_asst_streak, when_it_breaks=_asst_breaks,
-    verification=_asst_verification, safety_table=_asst_safety))
+    verification=_asst_verification, safety_table=_asst_safety,
+    station_observations=_asst_station_observations))
 _ASSISTANT_ON = _assistant.available()
 print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
 
@@ -3471,7 +3618,9 @@ def update_leaderboard_and_legend(var_key, time_idx, unit, selected_station):
     if _GFS_DS is None:
         return html.Div(), html.Div()
     legend = _risk_legend()
-    return _corrections_strip(unit, selected_station), legend
+    # The largest-corrections strip is held back until a dedicated model
+    # metrics section exists; _corrections_strip stays for that section.
+    return html.Div(), legend
 
 
 @app.callback(
@@ -3650,6 +3799,7 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
     # historical rarity of the event as the capstone of that thought.
     panel_headline = html.Div([
         _hero_tile(station_id, time_idx, unit, asos_df),
+        _conditions_line(asos_df, ZoneInfo(stn.get("tz", "America/New_York"))),
         _climate_context(station_id, unit),
         _overnight_and_streak_panel(station_id),
         _gev_popup(station_id, unit, time_idx),
