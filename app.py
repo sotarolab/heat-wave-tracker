@@ -75,6 +75,7 @@ from src.heat.gfs_conus import load_or_fetch, DEFAULT_OUT
 from src.heat.stations  import MAJOR_CONUS_STATIONS, get_station
 from src.heat.asos      import fetch_station_obs
 from src.heat.compute   import heat_index_array
+from src.heat          import assistant as _assistant
 from src.heat.bias      import (today_forecast_bias, brier_score_exceedance,
                                 BIAS_MIN_PAIRS, BIAS_MATCH_TOLERANCE)
 from src.heat.extremes  import (fit_gev, return_level, return_period, support,
@@ -2572,6 +2573,327 @@ def _overnight_and_streak_panel(station_id: str) -> html.Div:
              "borderTop": "1px solid #334155", "marginTop": "4px"})
 
 
+# ── assistant: data provider and renderer ────────────────────────────────────
+# The assistant (src/heat/assistant.py) answers only from these functions.
+# Each returns plain JSON-serializable data in degrees F with station-local
+# times; the model does the wording, the app does the drawing.
+
+def _asst_find_stations(query: str) -> list[dict]:
+    q = (query or "").strip().lower()
+    out = []
+    for st in MAJOR_CONUS_STATIONS:
+        hay = f"{st['id']} {st['name']} {st['state']}".lower()
+        if q and (q in hay or q == st["state"].lower()):
+            out.append({"station_id": st["id"], "name": st["name"], "state": st["state"]})
+    return out[:12]
+
+
+# Observations for the assistant come through a short in-process cache:
+# each question would otherwise hit IEM once per station, which is slow
+# and, under a burst of questions, gets this app rate-limited by IEM.
+_ASST_OBS_CACHE: dict = {}
+_ASST_OBS_TTL_S = 600
+
+
+_ASST_OBS72_CACHE: dict = {}
+
+
+def _asst_obs72(station_id: str) -> pd.DataFrame:
+    """72 h of observations for drawing a station chart inside an answer,
+    cached ten minutes like the other assistant-side fetches."""
+    import time as _time
+    hit = _ASST_OBS72_CACHE.get(station_id)
+    if hit and _time.monotonic() - hit[0] < _ASST_OBS_TTL_S:
+        return hit[1]
+    try:
+        obs = fetch_station_obs(station_id, hours=72)
+    except Exception:
+        obs = pd.DataFrame()
+    _ASST_OBS72_CACHE[station_id] = (_time.monotonic(), obs)
+    return obs
+
+
+def _asst_latest_obs(station_id: str, tz) -> dict | None:
+    import time as _time
+    hit = _ASST_OBS_CACHE.get(station_id)
+    if hit and _time.monotonic() - hit[0] < _ASST_OBS_TTL_S:
+        return hit[1]
+    latest = None
+    try:
+        obs = fetch_station_obs(station_id, hours=6)
+        if not obs.empty:
+            last = obs.dropna(subset=["temp_c"]).iloc[-1]
+            latest = {"time_local": last.valid_utc.tz_convert(tz).strftime("%a %b %d %I:%M %p"),
+                      "temp_f": round(float(last.temp_c) * 9 / 5 + 32, 1)}
+    except Exception:
+        latest = None
+    _ASST_OBS_CACHE[station_id] = (_time.monotonic(), latest)
+    return latest
+
+
+_ASST_NET_CACHE: dict = {"t": 0.0, "df": None}
+
+
+def _asst_current_conditions(limit: int = 10) -> dict:
+    """Latest observation per station across the network, ranked by
+    temperature. One IEM request per 100 stations through the DA ingest
+    fetch, cached for 10 minutes, so a burst of questions does not turn
+    into a burst of IEM requests."""
+    import time as _time
+    from src.heat.da.asos_network import fetch_obs_window
+    from src.heat.compute import heat_index_array
+    if _time.monotonic() - _ASST_NET_CACHE["t"] > _ASST_OBS_TTL_S or _ASST_NET_CACHE["df"] is None:
+        end = pd.Timestamp.now(tz="UTC")
+        try:
+            df, diag = fetch_obs_window([st["id"] for st in MAJOR_CONUS_STATIONS],
+                                        end - pd.Timedelta(hours=3), end)
+        except Exception as exc:
+            print(f"[assistant] network obs fetch failed: {exc}")
+            df, diag = pd.DataFrame(), {"failed_batches": 1}
+        _ASST_NET_CACHE.update({"t": _time.monotonic(), "df": df,
+                                "partial": bool(diag.get("failed_batches"))})
+    df = _ASST_NET_CACHE["df"]
+    if df is None or df.empty:
+        return {"error": "no current observations available"}
+    latest = (df.dropna(subset=["temp_c"]).sort_values("valid_utc")
+                .groupby("station_id").tail(1))
+    rows = []
+    for r in latest.itertuples(index=False):
+        # IEM returns ids without the ICAO "K" prefix ("DCA"); the station
+        # table uses "KDCA". Try both.
+        st = get_station(r.station_id) or get_station("K" + str(r.station_id))
+        if st is None:
+            continue
+        tz = ZoneInfo(st.get("tz", "America/New_York"))
+        t_f = float(r.temp_c) * 9 / 5 + 32
+        hi_f = None
+        if pd.notna(r.dewpoint_c):
+            hi_f = float(heat_index_array(np.array([r.temp_c]), np.array([r.dewpoint_c]))[0]) * 9 / 5 + 32
+        rows.append({"station_id": st["id"], "name": st["name"], "state": st["state"],
+                     "temp_f": round(t_f, 1),
+                     "heat_index_f": round(hi_f, 1) if hi_f is not None else None,
+                     "observed_local": pd.Timestamp(r.valid_utc).tz_convert(tz).strftime("%a %I:%M %p")})
+    rows.sort(key=lambda x: -x["temp_f"])
+    note = "latest routine observation per station; heat index from observed temp and dewpoint"
+    if _ASST_NET_CACHE.get("partial"):
+        note += (f"; PARTIAL COVERAGE: only {len(rows)} of {len(MAJOR_CONUS_STATIONS)} stations "
+                 f"reported (a data request was rate-limited); say so in the answer")
+    return {"as_of_utc": pd.Timestamp.now(tz="UTC").strftime("%Y-%m-%d %H:%M"),
+            "stations_reporting": len(rows), "stations_total": len(MAJOR_CONUS_STATIONS),
+            "hottest": rows[:limit], "note": note}
+
+
+def _asst_compare(station_ids: list, hours_ahead: int = 48) -> dict:
+    """Shared time axis, per-station raw and corrected series - one compact
+    payload for multi-station questions."""
+    if _GFS_DS is None:
+        return {"error": "no forecast loaded"}
+    stns = [get_station(s) for s in station_ids]
+    unknown = [sid for sid, st in zip(station_ids, stns) if st is None]
+    stns = [st for st in stns if st is not None]
+    if not stns:
+        return {"error": f"unknown stations {unknown}"}
+    tz = ZoneInfo(stns[0].get("tz", "America/New_York"))
+    times = pd.DatetimeIndex(_GFS_DS.time.values).tz_localize("UTC")
+    now = pd.Timestamp.now(tz="UTC")
+    keep = (times >= now - pd.Timedelta(hours=2)) & (times <= now + pd.Timedelta(hours=hours_ahead))
+    times = times[keep]
+    out = {"times_local": [t.tz_convert(tz).strftime("%a %I %p") for t in times],
+           "time_zone": str(tz), "stations": {}, "unknown": unknown,
+           "note": "temperatures in F; corrected is the learned model (v2), null beyond its coverage"}
+    for st in stns:
+        sel = dict(latitude=st["lat"], longitude=st["lon"], method="nearest")
+        raw = _GFS_DS["t2m"].sel(**sel).values[keep]
+        ml = _ML_LINE.get(st["id"]) if _ML_LINE else None
+        corr = []
+        for t in times:
+            if ml is not None and t in ml.index:
+                corr.append(round(float(ml.loc[t].ml_c) * 9 / 5 + 32, 1))
+            else:
+                corr.append(None)
+        out["stations"][st["id"]] = {"name": st["name"],
+                                     "raw_f": [round(float(v) * 9 / 5 + 32, 1) for v in raw],
+                                     "corrected_f": corr}
+    return out
+
+
+def _asst_station_forecast(station_id: str, hours_ahead: int = 48) -> dict:
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None:
+        return {"error": f"unknown station {station_id}"}
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    t = _GFS_DS["t2m"].sel(**sel).to_series(); hi = _GFS_DS["hi"].sel(**sel).to_series()
+    idx = pd.DatetimeIndex(t.index).tz_localize("UTC").tz_convert(tz)
+    now = pd.Timestamp.now(tz=tz)
+    ml = _ML_LINE.get(station_id) if _ML_LINE else None
+    rows = []
+    for ts, tv, hv in zip(idx, t.values, hi.values):
+        if ts < now - pd.Timedelta(hours=2) or ts > now + pd.Timedelta(hours=hours_ahead):
+            continue
+        row = {"time_local": ts.strftime("%a %b %d %I:%M %p"),
+               "raw_temp_f": round(tv * 9 / 5 + 32, 1),
+               "raw_heat_index_f": round(hv * 9 / 5 + 32, 1)}
+        if ml is not None:
+            key = ts.tz_convert("UTC")
+            if key in ml.index:
+                r = ml.loc[key]
+                row["corrected_temp_f"] = round(r.ml_c * 9 / 5 + 32, 1)
+                if pd.notna(r.lo_c):
+                    row["band80_f"] = [round(r.lo_c * 9 / 5 + 32, 1), round(r.hi_c * 9 / 5 + 32, 1)]
+        rows.append(row)
+    latest = _asst_latest_obs(station_id, tz)
+    return {"station_id": station_id, "name": stn["name"], "state": stn["state"],
+            "gfs_init_utc": str(_GFS_DS.attrs.get("gfs_init")),
+            "corrected_available": ml is not None,
+            "note": "corrected_temp_f is the learned model (v2) forecast; band80_f is its 80% interval",
+            "latest_observation": latest, "hours": rows}
+
+
+def _asst_hottest(day: str = "today", limit: int = 10) -> dict:
+    peaks = _get_station_daily_peaks("hi")
+    if not peaks:
+        return {"error": "no forecast loaded"}
+    days = [d for d, _ in peaks]
+    today = _now_et().date()
+    want = (today if day in ("", "today")
+            else today + pd.Timedelta(days=1) if day == "tomorrow" else None)
+    if want is None:
+        try:
+            want = pd.Timestamp(day).date()
+        except Exception:
+            return {"error": f"unrecognized day {day}", "available_days": [str(d) for d in days]}
+    match = [rows for d, rows in peaks if d == want]
+    if not match:
+        return {"error": f"no forecast for {want}", "available_days": [str(d) for d in days]}
+    out = []
+    for st, peak_c, idx in match[0][:limit]:
+        out.append({"station_id": st["id"], "name": st["name"], "state": st["state"],
+                    "peak_heat_index_f": round(peak_c * 9 / 5 + 32, 1),
+                    "peak_time_et": _to_et(_GFS_DS.time.values[idx]).strftime("%I:%M %p %Z"),
+                    "category": _heat_index_category(peak_c)})
+    return {"day": str(want), "metric": "peak heat index (feels like)", "stations": out}
+
+
+def _asst_streak(station_id: str) -> dict:
+    stn = get_station(station_id)
+    if stn is None:
+        return {"error": f"unknown station {station_id}"}
+    st = _heat_streak(station_id)
+    if st is None:
+        return {"station_id": station_id, "name": stn["name"], "streak_days": 0,
+                "note": "today's peak is below Caution at this station"}
+    return {"station_id": station_id, "name": stn["name"], **st,
+            "note": "consecutive forecast days at or above today's NWS category, counted forward"}
+
+
+def _asst_breaks(station_id: str) -> dict:
+    stn = get_station(station_id)
+    if stn is None or _GFS_DS is None:
+        return {"error": f"unknown station {station_id}"}
+    tz = ZoneInfo(stn.get("tz", "America/New_York"))
+    sel = dict(latitude=stn["lat"], longitude=stn["lon"], method="nearest")
+    hi = _GFS_DS["hi"].sel(**sel).to_series()
+    idx = pd.DatetimeIndex(hi.index).tz_localize("UTC").tz_convert(tz)
+    daily = []
+    for d in sorted(set(idx.date)):
+        v = float(hi[idx.date == d].max())
+        daily.append({"date": str(d), "peak_heat_index_f": round(v * 9 / 5 + 32, 1),
+                      "category": _heat_index_category(v)})
+    first = next((d["date"] for d in daily if d["peak_heat_index_f"] < 90.0), None)
+    return {"station_id": station_id, "name": stn["name"], "threshold_f": 90.0,
+            "first_day_below_extreme_caution": first, "daily_peaks": daily,
+            "note": "raw GFS heat index; the learned correction applies to temperature only"}
+
+
+def _asst_verification() -> dict:
+    v = _ML_VERIF
+    if not v:
+        return {"error": "no scored rows yet"}
+    return {"model_version": v["version"], "scored_station_hours": v["n"],
+            "window": f"{v['start']:%b %d} to {v['end']:%b %d}",
+            "rmse_f": {"raw_gfs": round(v["rmse_raw"] * 9 / 5, 2),
+                       "per_station_offset_baseline": round(v["rmse_offset"] * 9 / 5, 2),
+                       "learned_correction": round(v["rmse_ml"] * 9 / 5, 2)},
+            "band95_observed_coverage": v.get("band_coverage"),
+            "note": "scored live against observations that arrived after training; leads <= 8 h"}
+
+
+def _asst_safety() -> dict:
+    return {"source": "NWS heat index chart, https://www.weather.gov/safety/heat-index",
+            "categories": [{"min_heat_index_f": f, "category": label,
+                            "description": RISK_DESCRIPTIONS.get(label, "")}
+                           for f, label, _ in RISK_CATEGORIES_F],
+            "below_first_threshold": RISK_DESCRIPTIONS[NO_RISK_LABEL]}
+
+
+_assistant.configure(_assistant.Provider(
+    find_stations=_asst_find_stations, station_forecast=_asst_station_forecast,
+    hottest_stations=_asst_hottest, compare_stations=_asst_compare,
+    current_conditions=_asst_current_conditions,
+    heat_streak=_asst_streak, when_it_breaks=_asst_breaks,
+    verification=_asst_verification, safety_table=_asst_safety))
+_ASSISTANT_ON = _assistant.available()
+print(f"[assistant] {'enabled' if _ASSISTANT_ON else 'disabled (no credentials)'}")
+
+
+# Example chips: every one is a deterministic fast path (no model call,
+# instant, no budget). Two labelled rows: for everyone, for forecasters.
+_ASSISTANT_EXAMPLES = list(_assistant.FAST_PATHS)
+
+_PANEL_STYLE = {"position": "fixed", "top": "0", "right": "0", "height": "100vh", "width": "440px",
+                "maxWidth": "100vw", "zIndex": 999, "overflowY": "auto", "padding": "14px 16px",
+                "backgroundColor": "#0f172a", "borderLeft": "1px solid #334155",
+                "boxShadow": "-8px 0 24px rgba(0,0,0,0.5)", "display": "block"}
+
+
+def _render_assistant(result: dict, unit: str) -> list:
+    """Turn {answer, renders, tools_used} into Dash children."""
+    # dcc.Markdown renders the light formatting the model uses (bold,
+    # bullets) and sanitizes HTML by default; the text is model output and
+    # is never trusted as markup.
+    children = [dcc.Markdown(result["answer"], style={"fontSize": "13px", "color": "#e2e8f0",
+                                                      "lineHeight": "1.5", "marginBottom": "8px"})]
+    for r in result.get("renders", []):
+        if r["kind"] == "table":
+            children.append(html.Div(r["title"], style={"fontSize": "12px", "fontWeight": "600",
+                                                        "color": "#f8fafc", "margin": "6px 0 2px"}))
+            children.append(html.Table(
+                [html.Thead(html.Tr([html.Th(c, style={"textAlign": "left", "padding": "3px 8px",
+                                                       "color": "#94a3b8", "fontSize": "11px"})
+                                     for c in r["columns"]]))] +
+                [html.Tbody([html.Tr([html.Td(c, style={"padding": "3px 8px", "fontSize": "12px",
+                                                        "borderTop": "1px solid #1e293b"})
+                                      for c in row]) for row in r["rows"]])],
+                style={"borderCollapse": "collapse", "marginBottom": "8px"}))
+        elif r["kind"] == "chart":
+            fig = go.Figure()
+            for srs in r["series"]:
+                if r.get("chart_type") == "bar":
+                    fig.add_trace(go.Bar(x=r["x"], y=srs["y"], name=srs["name"]))
+                else:
+                    fig.add_trace(go.Scatter(x=r["x"], y=srs["y"], mode="lines+markers",
+                                             name=srs["name"]))
+            fig.update_layout(title=dict(text=r["title"], font=dict(size=12, color="#e2e8f0")),
+                              paper_bgcolor=_PANEL_BG, plot_bgcolor=_PANEL_BG, height=240,
+                              margin=dict(l=40, r=10, t=36, b=40), font=dict(color=_PANEL_FONT),
+                              yaxis=dict(title=r.get("y_label", ""), gridcolor=_PANEL_GRID),
+                              xaxis=dict(gridcolor=_PANEL_GRID),
+                              legend=dict(orientation="h", y=-0.25))
+            children.append(dcc.Graph(figure=fig, config={"displayModeBar": False}))
+        elif r["kind"] == "station_chart":
+            sid = r["station_id"]
+            if get_station(sid) is not None:
+                obs = _asst_obs72(sid)
+                fig, _ = _build_station_figure(sid, obs, 0, unit=unit, metrics=["t2m"],
+                                               display_mode="ml")
+                children.append(dcc.Graph(figure=fig, config={"displayModeBar": False}))
+    if result.get("tools_used"):
+        children.append(html.Div("sources: " + " · ".join(dict.fromkeys(result["tools_used"])),
+                                 style={"fontSize": "10px", "color": "#64748b", "marginTop": "4px"}))
+    return children
+
+
 # ── Dash app ──────────────────────────────────────────────────────────────────
 
 app    = Dash(__name__)
@@ -2874,6 +3196,66 @@ app.layout = html.Div(
 
         # ── hidden components ─────────────────────────────────────────────────
         dcc.Store(id="selected-station", data="KDCA"),
+
+        # ── Sol: floating launcher + side panel ──────────────────────────────
+        # Always reachable from anywhere on the page, never in the way. Both
+        # elements are removed (display none) when no credential exists.
+        dcc.Store(id="assistant-history", data=[]),
+        dcc.Store(id="assistant-open", data=False),
+        html.Button(f"☀️ Ask {_assistant.ASSISTANT_NAME}", id="assistant-launcher", n_clicks=0,
+                    style={"position": "fixed", "right": "18px", "bottom": "18px", "zIndex": 1000,
+                           "fontSize": "14px", "fontWeight": "700", "padding": "10px 16px",
+                           "borderRadius": "22px", "border": "1px solid #7c3aed",
+                           "backgroundColor": "#6d28d9", "color": "white", "cursor": "pointer",
+                           "boxShadow": "0 4px 16px rgba(0,0,0,0.45)",
+                           "display": "block" if _ASSISTANT_ON else "none"}),
+        html.Div(id="assistant-panel", style={"display": "none"}, children=[
+            html.Div(style={"display": "flex", "alignItems": "center", "justifyContent": "space-between",
+                            "marginBottom": "6px"}, children=[
+                html.Div(f"☀️ {_assistant.ASSISTANT_NAME}", style={"fontSize": "16px", "fontWeight": "700",
+                                                                     "color": "#f8fafc"}),
+                html.Div([
+                    html.Button("New chat", id="assistant-reset", n_clicks=0,
+                                style={"fontSize": "11px", "padding": "3px 8px", "marginRight": "6px",
+                                       "borderRadius": "6px", "border": "1px solid #334155",
+                                       "backgroundColor": "#1e293b", "color": "#cbd5e1", "cursor": "pointer"}),
+                    html.Button("×", id="assistant-close", n_clicks=0,
+                                style={"fontSize": "16px", "padding": "0 8px", "borderRadius": "6px",
+                                       "border": "1px solid #334155", "backgroundColor": "#1e293b",
+                                       "color": "#cbd5e1", "cursor": "pointer"}),
+                ]),
+            ]),
+            html.Div("I will answer only using data from this site's forecast, its learned "
+                     "correction, and the verification record. Please follow heat safety "
+                     "guidelines from your local NWS office.",
+                     style={"fontSize": "12px", "color": "#64748b", "marginBottom": "8px"}),
+            html.Div(id="assistant-answer", style={"display": "none"}),
+            html.Div(style={"display": "flex", "gap": "6px", "marginTop": "8px"}, children=[
+                dcc.Input(id="assistant-input", type="text", maxLength=500, debounce=True,
+                          placeholder="Ask about the forecast...",
+                          style={"flex": "1", "fontSize": "14px", "padding": "9px 11px",
+                                 "borderRadius": "6px", "border": "1px solid #334155",
+                                 "backgroundColor": "#0f172a", "color": "#e2e8f0"}),
+                html.Button("Ask", id="assistant-send", n_clicks=0,
+                            style={"fontSize": "13px", "padding": "8px 14px", "borderRadius": "6px",
+                                   "border": "1px solid #7c3aed", "backgroundColor": "#6d28d9",
+                                   "color": "white", "cursor": "pointer"}),
+            ]),
+            *[html.Div([
+                html.Div(label, style={"fontSize": "12px", "color": "#94a3b8", "margin": "10px 0 4px",
+                                       "fontWeight": "600"}),
+                html.Div(style={"display": "flex", "gap": "6px", "flexWrap": "wrap"},
+                         children=[html.Button(q, id={"type": "assistant-example",
+                                                      "index": _ASSISTANT_EXAMPLES.index(q)}, n_clicks=0,
+                                               style={"fontSize": "13px", "padding": "6px 12px",
+                                                      "borderRadius": "14px", "border": "1px solid #334155",
+                                                      "backgroundColor": "#1e293b", "color": "#cbd5e1",
+                                                      "cursor": "pointer"})
+                                   for q in chips]),
+              ]) for label, chips in (("For everyone", _assistant.GENERAL_CHIPS),
+                                      ("For forecasters", _assistant.FORECASTER_CHIPS))],
+            dcc.Loading(html.Div(id="assistant-busy"), type="dot", color="#a855f7"),
+        ]),
         dcc.Store(id="current-time-idx"),
         dcc.Store(id="viewport-width", data=PAGE_MAX_WIDTH - 48),
     ],
@@ -3296,6 +3678,86 @@ def update_station_panel(station_id, time_idx, unit, bias_window, bias_display_m
 
 
 # ── entry point ───────────────────────────────────────────────────────────────
+
+
+_LAUNCHER_STYLE = {"position": "fixed", "right": "18px", "bottom": "18px", "zIndex": 1000,
+                   "fontSize": "14px", "fontWeight": "700", "padding": "10px 16px",
+                   "borderRadius": "22px", "border": "1px solid #7c3aed",
+                   "backgroundColor": "#6d28d9", "color": "white", "cursor": "pointer",
+                   "boxShadow": "0 4px 16px rgba(0,0,0,0.45)"}
+
+
+@app.callback(
+    Output("assistant-panel", "style"),
+    Output("assistant-launcher", "style"),
+    Input("assistant-launcher", "n_clicks"),
+    Input("assistant-close", "n_clicks"),
+    State("assistant-panel", "style"),
+    prevent_initial_call=True,
+)
+def toggle_assistant(_open, _close, style):
+    """The launcher hides while the panel is open (it would sit inside the
+    panel's area otherwise) and returns when the panel closes."""
+    is_open = (style or {}).get("display") == "block"
+    if ctx.triggered_id == "assistant-close" or is_open:
+        return {"display": "none"}, _LAUNCHER_STYLE
+    return _PANEL_STYLE, {**_LAUNCHER_STYLE, "display": "none"}
+
+
+@app.callback(
+    Output("assistant-answer", "children"),
+    Output("assistant-answer", "style"),
+    Output("assistant-input", "value"),
+    Output("assistant-history", "data"),
+    Output("assistant-busy", "children"),
+    Input("assistant-send", "n_clicks"),
+    Input("assistant-input", "n_submit"),
+    Input({"type": "assistant-example", "index": ALL}, "n_clicks"),
+    Input("assistant-reset", "n_clicks"),
+    State("assistant-input", "value"),
+    State("unit-selector", "value"),
+    State("assistant-history", "data"),
+    prevent_initial_call=True,
+)
+def ask_assistant(_n, _submit, _example_clicks, _reset, question, unit, history):
+    """One question, one grounded answer, with the last few exchanges of
+    this browser session carried along so follow-ups resolve. Example
+    chips fill and ask; Enter and the button ask what was typed; New chat
+    clears the memory."""
+    from flask import request
+    triggered = ctx.triggered_id
+    hidden = {"display": "none"}
+    shown = {"marginTop": "6px", "backgroundColor": "#1e293b", "borderRadius": "8px",
+             "padding": "10px 12px", "border": "1px solid #334155", "display": "block"}
+    if triggered == "assistant-reset":
+        return [], hidden, "", [], no_update
+    if isinstance(triggered, dict) and triggered.get("type") == "assistant-example":
+        if not (ctx.triggered and ctx.triggered[0]["value"]):
+            return no_update, no_update, no_update, no_update, no_update
+        question = _ASSISTANT_EXAMPLES[triggered["index"]]
+    if not question or not question.strip():
+        return no_update, no_update, no_update, no_update, no_update
+    err = lambda msg: (html.Div(msg, style={"fontSize": "12px", "color": "#f87171"}), shown,
+                       question, history or [], no_update)
+    fwd = request.headers.get("x-forwarded-for", "")
+    key = fwd.split(",")[0].strip() if fwd else (request.remote_addr or "unknown")
+    is_fast = _assistant.FAST_PATHS.get(question.strip()) is not None
+    reason = _assistant.check_rate_limit(key) or (None if is_fast else _assistant.reserve_question())
+    if reason:
+        return err(reason)
+    try:
+        result = _assistant.fast_path(question) or _assistant.ask(question.strip(), history=history or [])
+    except Exception as exc:
+        print(f"[assistant] failed: {exc}")
+        return err("Sol is unavailable right now.")
+    u = result.get("usage", {})
+    _assistant.record_spend(u)
+    print(f"[assistant] {u.get('seconds')}s iters={u.get('iterations')} "
+          f"in={u.get('input_tokens')} cached={u.get('cache_read_input_tokens')} "
+          f"out={u.get('output_tokens')} tools={result.get('tools_used')}")
+    new_history = ((history or []) + [[question.strip(), result["answer"]]])[-_assistant.HISTORY_TURNS:]
+    return _render_assistant(result, unit or "F"), shown, "", new_history, no_update
+
 
 if __name__ == "__main__":
     if _GFS_DS is None:

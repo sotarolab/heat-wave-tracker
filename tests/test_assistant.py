@@ -1,0 +1,177 @@
+"""
+tests/test_assistant.py
+========================
+Pure-logic tests for src/heat/assistant.py: rate limiting, render
+capture, and configuration. No network and no SDK, so they run under
+requirements-dev.txt; the model-facing behaviour is covered by the
+offline eval suite in scripts/assistant_evals.py instead.
+"""
+import pytest
+
+from src.heat import assistant
+
+
+class TestRateLimit:
+    def setup_method(self):
+        assistant._hits.clear()
+
+    def test_allows_then_blocks_per_minute(self):
+        for _ in range(assistant.ASK_PER_MINUTE):
+            assert assistant.check_rate_limit("a", now=100.0) is None
+        assert "short time" in assistant.check_rate_limit("a", now=100.0)
+
+    def test_minute_window_slides(self):
+        for _ in range(assistant.ASK_PER_MINUTE):
+            assistant.check_rate_limit("b", now=0.0)
+        assert assistant.check_rate_limit("b", now=61.0) is None
+
+    def test_daily_cap(self):
+        t = 0.0
+        for i in range(assistant.ASK_PER_DAY):
+            assistant.check_rate_limit("c", now=t)
+            t += 61.0
+        assert "Daily question limit" in assistant.check_rate_limit("c", now=t)
+
+    def test_clients_are_independent(self):
+        for _ in range(assistant.ASK_PER_MINUTE):
+            assistant.check_rate_limit("d", now=5.0)
+        assert assistant.check_rate_limit("e", now=5.0) is None
+
+    def test_global_cap(self, monkeypatch):
+        monkeypatch.setattr(assistant, "ASK_GLOBAL_PER_DAY", 2)
+        assert assistant.check_rate_limit("f", now=0.0) is None
+        assert assistant.check_rate_limit("g", now=0.0) is None
+        assert "daily limit" in assistant.check_rate_limit("h", now=0.0)
+
+
+class TestRenderCapture:
+    def test_capture_records_into_active_context(self):
+        token = assistant._renders.set([])
+        try:
+            assert assistant._capture("table", {"title": "t", "columns": ["a"], "rows": [["1"]]}) == "rendered"
+            got = assistant._renders.get()
+        finally:
+            assistant._renders.reset(token)
+        assert got == [{"kind": "table", "title": "t", "columns": ["a"], "rows": [["1"]]}]
+
+    def test_capture_outside_context_is_noop(self):
+        # A tool called with no active ask() must not raise or leak state.
+        assert assistant._capture("chart", {"title": "x"}) == "rendered"
+
+    def test_capture_kind_is_not_overwritten_by_spec(self):
+        token = assistant._renders.set([])
+        try:
+            assistant._capture("chart", {"chart_type": "bar", "title": "x"})
+            got = assistant._renders.get()[0]
+        finally:
+            assistant._renders.reset(token)
+        assert got["kind"] == "chart" and got["chart_type"] == "bar"
+
+
+class TestConfiguration:
+    def test_unavailable_without_provider(self, monkeypatch):
+        monkeypatch.setattr(assistant, "_provider", None)
+        assert assistant.available() is False
+
+    def test_provider_access_raises_when_unconfigured(self, monkeypatch):
+        monkeypatch.setattr(assistant, "_provider", None)
+        with pytest.raises(RuntimeError):
+            assistant._p()
+
+
+class TestSpendBudget:
+    def setup_method(self):
+        assistant._spend.update({"day": None, "tokens": 0})
+
+    def test_accumulates_and_exhausts(self, monkeypatch):
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 1000)
+        assistant.record_spend({"input_tokens": 600, "output_tokens": 100}, now_day="d1")
+        assert assistant.spend_exhausted(now_day="d1") is False
+        assistant.record_spend({"input_tokens": 300, "output_tokens": 0}, now_day="d1")
+        assert assistant.spend_exhausted(now_day="d1") is True
+
+    def test_resets_on_new_day(self, monkeypatch):
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 100)
+        assistant.record_spend({"input_tokens": 100, "output_tokens": 0}, now_day="d1")
+        assert assistant.spend_exhausted(now_day="d2") is False
+
+    def test_cache_reads_count_at_a_tenth(self, monkeypatch):
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 100)
+        assistant.record_spend({"cache_read_input_tokens": 900}, now_day="d1")
+        assert assistant._spend["tokens"] == 90
+        assert assistant.spend_exhausted(now_day="d1") is False
+
+
+class TestHistory:
+    def test_last_n_exchanges_as_turns(self):
+        hist = [["q1", "a1"], ["q2", "a2"], ["q3", "a3"], ["q4", "a4"]]
+        msgs = assistant.history_messages(hist)
+        assert [m["role"] for m in msgs] == ["user", "assistant"] * assistant.HISTORY_TURNS
+        assert msgs[0]["content"] == "q2"          # oldest kept is the 2nd of 4
+
+    def test_empty_and_blank_pairs_skipped(self):
+        assert assistant.history_messages(None) == []
+        assert assistant.history_messages([["", "a"], ["q", "  "]]) == []
+
+
+class TestScopeAndBudgetFallback:
+    def test_reserve_without_db_uses_memory_tally(self, monkeypatch):
+        monkeypatch.delenv("NEON_DATABASE_URL", raising=False)
+        monkeypatch.setattr(assistant, "TOKENS_PER_DAY", 10)
+        assistant._spend.update({"day": "d9", "tokens": 0})
+        assert assistant.reserve_question(day="d9") is None
+        assistant.record_spend({"input_tokens": 10}, now_day="d9")
+        assert assistant.reserve_question(day="d9") == "budget spent"
+
+    def test_off_topic_reply_is_fixed_text(self):
+        assert "heat forecast" in assistant.OFF_TOPIC_REPLY
+
+
+class TestFastPaths:
+    """Chip answers are deterministic and never touch the model."""
+
+    def _fake(self, monkeypatch):
+        prov = assistant.Provider(
+            find_stations=lambda q: [],
+            station_forecast=lambda sid, h: {"name": "X", "hours": [], "latest_observation": None},
+            hottest_stations=lambda day, n: {"day": "2026-09-04", "stations": [
+                {"station_id": "KMEM", "name": "Memphis TN", "peak_heat_index_f": 107.1,
+                 "peak_time_et": "02:00 PM EDT", "category": "Danger"}]},
+            compare_stations=lambda ids, h: {"time_zone": "UTC", "times_local": ["t1", "t2"],
+                                             "stations": {"KDCA": {"name": "DC", "raw_f": [90.0, 91.0],
+                                                                   "corrected_f": [88.0, None]}}},
+            current_conditions=lambda n: {"as_of_utc": "x", "stations_reporting": 1, "stations_total": 165,
+                                          "hottest": [{"station_id": "KPHX", "name": "Phoenix AZ",
+                                                       "temp_f": 95.0, "heat_index_f": 96.0,
+                                                       "observed_local": "Thu 06:51 PM"}],
+                                          "note": "n"},
+            heat_streak=lambda sid: {"streak_days": 3, "category": "Danger"},
+            when_it_breaks=lambda sid: {"name": "Omaha NE", "first_day_below_extreme_caution": "2026-09-07",
+                                        "daily_peaks": [{"date": "2026-09-04", "peak_heat_index_f": 105.0,
+                                                         "category": "Danger"}], "note": "raw"},
+            verification=lambda: {"model_version": "v", "window": "w", "scored_station_hours": 10,
+                                  "rmse_f": {"raw_gfs": 3.87, "per_station_offset_baseline": 3.62,
+                                             "learned_correction": 2.92}, "band95_observed_coverage": 0.94},
+            safety_table=lambda: {"categories": [
+                {"min_heat_index_f": 80, "category": "Caution", "description": "Fatigue possible."},
+                {"min_heat_index_f": 90, "category": "Extreme Caution", "description": "Heat cramps possible."},
+                {"min_heat_index_f": 103, "category": "Danger", "description": "Heat stroke possible."}],
+                "below_first_threshold": "Comfortable."})
+        monkeypatch.setattr(assistant, "_provider", prov)
+
+    def test_every_chip_renders_without_model(self, monkeypatch):
+        self._fake(monkeypatch)
+        for q in assistant.FAST_PATHS:
+            r = assistant.fast_path(q)
+            assert r is not None and r["usage"]["fast_path"] is True
+            assert r["renders"], q
+            assert r["answer"]
+
+    def test_non_chip_returns_none(self, monkeypatch):
+        self._fake(monkeypatch)
+        assert assistant.fast_path("something typed by hand") is None
+
+    def test_partial_coverage_is_stated(self, monkeypatch):
+        self._fake(monkeypatch)
+        r = assistant.fast_path("Where is it hottest right now?")
+        assert "1 of 165" in r["answer"]
