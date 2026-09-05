@@ -3618,7 +3618,9 @@ def update_leaderboard_and_legend(var_key, time_idx, unit, selected_station):
     if _GFS_DS is None:
         return html.Div(), html.Div()
     legend = _risk_legend()
-    return _corrections_strip(unit, selected_station), legend
+    # The largest-corrections strip is held back until a dedicated model
+    # metrics section exists; _corrections_strip stays for that section.
+    return html.Div(), legend
 
 
 @app.callback(
