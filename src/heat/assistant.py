@@ -46,6 +46,12 @@ MAX_CHART_POINTS = 120
 SYSTEM_PROMPT = """You are Sol, the assistant for a US heat wave tracker. You answer questions about
 THIS site's forecast, its learned correction, and its verification record, using the tools provided.
 
+## Past hours mean observations too
+
+For "the last N hours", trends, gradients, or what conditions have been: call
+station_observations (or chart_station_observations to draw it). Report the change over the
+window with its start and end times.
+
 ## "Right now" means observations; "today" means the forecast peak
 
 For "right now", "currently", "at the moment": call current_conditions, which returns the latest
@@ -110,6 +116,7 @@ class Provider:
     heat_streak: object            # (station_id) -> dict
     when_it_breaks: object         # (station_id) -> dict
     verification: object           # () -> dict
+    station_observations: object   # (station_id, hours) -> dict
     safety_table: object           # () -> dict  (NWS categories, verbatim)
 
 
@@ -212,6 +219,22 @@ def _build_tools():
         return _dumps(_p().hottest_stations(day, int(limit)))
 
     @beta_tool
+    def station_observations(station_id: str, hours: int = 6) -> str:
+        """OBSERVED history at one station over the past `hours` (up to 72): hourly temperature,
+        dewpoint, wind and gusts, sky cover, pressure, present weather, plus a summary of the
+        temperature change over the window. Use for trends, gradients, "what has it done in
+        the last N hours", or what conditions have been like.
+        """
+        return _dumps(_p().station_observations(station_id, int(hours)))
+
+    @beta_tool
+    def chart_station_observations(station_id: str, hours: int = 6) -> str:
+        """Draw the observed temperature and dewpoint at a station over the past `hours` and
+        return the trend summary. Use when a person asks to see or plot recent observations.
+        """
+        return _dumps(render_station_observations(station_id, int(hours)))
+
+    @beta_tool
     def heat_streak(station_id: str) -> str:
         """How many consecutive forecast days a station stays at or above its current NWS heat risk
         category, and which category. Use for "how long will it stay this hot".
@@ -308,6 +331,7 @@ def _build_tools():
         return _capture("station_chart", {"station_id": station_id})
 
     return [find_stations, station_forecast, compare_stations, hottest_stations, current_conditions,
+            station_observations, chart_station_observations,
             heat_streak, when_it_breaks, chart_station_comparison, table_current_conditions,
             table_hottest_day, table_daily_peaks,
             verification_summary, heat_safety_guidance, show_table, show_chart,
@@ -599,6 +623,19 @@ def render_daily_peaks(station_id: str) -> dict:
             "streak": streak, "note": d["note"]}
 
 
+def render_station_observations(station_id: str, hours: int = 6) -> dict:
+    d = _p().station_observations(station_id, hours)
+    if "error" in d or not d.get("rows"):
+        return d if "error" in d else {"error": f"no observations for {station_id}"}
+    rows = d["rows"]
+    _capture("chart", {"title": f"{d['name']} ({station_id}) observed, past {hours} h",
+                       "chart_type": "line", "x": [r["time_local"] for r in rows],
+                       "series": [{"name": "temperature", "y": [r["temp_f"] for r in rows]},
+                                  {"name": "dewpoint", "y": [r.get("dewpoint_f") for r in rows]}],
+                       "y_label": "°F"})
+    return {"drawn": "chart", **{k: v for k, v in d.items() if k != "rows"}}
+
+
 # ── chip fast paths: no model call, deterministic text, instant ─────────────
 
 # Ordered: the first four for everyone, the last three for forecasters.
@@ -610,6 +647,7 @@ FAST_PATHS = {
     "Compare DC and Baltimore for the next 48 hours": lambda: _fast_compare(["KDCA", "KBWI"]),
     "How accurate has the corrected forecast been?": lambda: _fast_verification(),
     "Show me the corrected forecast for Denver": lambda: _fast_station("KDEN"),
+    "How has the temperature trended in Washington DC over the past 6 hours?": lambda: _fast_obs("KDCA", 6),
 }
 GENERAL_CHIPS = list(FAST_PATHS)[:4]
 FORECASTER_CHIPS = list(FAST_PATHS)[4:]
@@ -695,6 +733,18 @@ def _fast_safety(sid):
         f"People with health conditions, children, and older adults should follow local health "
         f"guidance; see weather.gov/heat. This is the raw GFS heat index, not medical advice.",
         ["when_it_breaks", "heat_safety_guidance"])
+
+
+def _fast_obs(sid, hours):
+    d = render_station_observations(sid, hours)
+    if "error" in d:
+        return _fast_result(d["error"], ["station_observations"])
+    sm = d["summary"]
+    return _fast_result(
+        f"{d['name']} ({sid}), past {hours} h of observations: {sm['start_temp_f']:.0f}°F at "
+        f"{sm['start_time_local']} to {sm['end_temp_f']:.0f}°F at {sm['end_time_local']}, a change of "
+        f"{sm['change_f']:+.0f}°F ({sm['rate_f_per_h']:+.1f}°F per hour). "
+        f"{sm['conditions']}", ["station_observations"])
 
 
 def _fast_verification():
