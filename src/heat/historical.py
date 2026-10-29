@@ -39,7 +39,7 @@ import requests
 
 STATION_LOOKUP_URL = "https://mesonet.agron.iastate.edu/api/1/station/{}.json"
 DAILY_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/daily.py"
-USER_AGENT = "heat-wave-tracker/0.1 (portfolio/research use)"
+USER_AGENT = "heat-wave-tracker/0.1 (research use)"
 
 _MANUAL_OVERRIDES = {"KPBI": "DJT"}  # see module Gotcha 2
 

@@ -37,7 +37,7 @@ import requests
 import pandas as pd
 
 IEM_URL = "https://mesonet.agron.iastate.edu/cgi-bin/request/asos.py"
-USER_AGENT = "heat-wave-tracker/0.1 (portfolio/research use)"
+USER_AGENT = "heat-wave-tracker/0.1 (research use)"
 
 _STATION_ALIASES = {"KPBI": "DJT"}  # see module Gotcha 2
 
