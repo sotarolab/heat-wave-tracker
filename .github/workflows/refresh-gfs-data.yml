@@ -67,7 +67,16 @@ jobs:
         run: |
           pip install --quiet xgboost scikit-learn
           python scripts/log_corrections.py
-
+      # camanchaca reads forecast_obs_pairs, ml_corrections and station_obs_extra from its
+      # own Neon project. Copy the new rows across right after they are written so its learned
+      # line stays current. Idempotent; best-effort like the two steps above.
+      - name: Sync archive tables to camanchaca
+        continue-on-error: true
+        env:
+          SRC_DATABASE_URL: ${{ secrets.NEON_DATABASE_URL }}
+          DST_DATABASE_URL: ${{ secrets.CAMANCHACA_DATABASE_URL }}
+        run: python scripts/sync_to_camanchaca.py
+ 
       - name: Commit and push if data changed
         id: commit
         run: |
