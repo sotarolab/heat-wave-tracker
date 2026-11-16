@@ -75,6 +75,7 @@ from src.heat.gfs_conus import load_or_fetch, DEFAULT_OUT
 from src.heat.stations  import MAJOR_CONUS_STATIONS, get_station
 from src.heat.asos      import fetch_station_obs
 from src.heat.compute   import heat_index_array
+from src.heat.freshness import badge as _badge
 from src.heat.bias      import (today_forecast_bias, brier_score_exceedance,
                                 BIAS_MIN_PAIRS, BIAS_MATCH_TOLERANCE)
 from src.heat.extremes  import (fit_gev, return_level, return_period, support,
@@ -2646,11 +2647,10 @@ app.layout = html.Div(
                     html.H1("2026 US Heat Wave Tracker",
                         style={"color": "#f8fafc", "margin": 0, "display": "inline-block",
                                "fontSize": "20px", "fontWeight": "600", "verticalAlign": "middle"}),
-                    html.Span("LIVE", title="Forecast data refreshes automatically every 6 hours",
-                        style={"backgroundColor": "#dc2626", "color": "#fef2f2",
-                               "fontSize": "10px", "fontWeight": "700", "letterSpacing": "0.5px",
-                               "padding": "2px 7px", "borderRadius": "999px",
-                               "marginLeft": "10px", "verticalAlign": "middle"}),
+                    # Filled when the page loads (update_live_badge), so a stalled refresh
+                    # cannot keep saying LIVE.
+                    html.Span(id="live-badge",
+                        title="Forecast data refreshes automatically every 6 hours"),
                 ]),
                 html.Span(f"{_init_label}  ·  Auto-updates every 6h",
                     style={"fontSize": "12px", "color": "#64748b"}),
@@ -2898,6 +2898,19 @@ app.clientside_callback(
 
 
 # ── callbacks ─────────────────────────────────────────────────────────────────
+
+@app.callback(
+    Output("live-badge", "children"),
+    Output("live-badge", "style"),
+    Input("selected-station", "data"),
+)
+def update_live_badge(_station_id):
+    text, live = _badge(_GFS_INIT, pd.Timestamp.now(tz="UTC"))
+    return text, {"backgroundColor": "#dc2626" if live else "#475569", "color": "#fef2f2",
+                  "fontSize": "10px", "fontWeight": "700", "letterSpacing": "0.5px",
+                  "padding": "2px 7px", "borderRadius": "999px",
+                  "marginLeft": "10px", "verticalAlign": "middle"}
+
 
 @app.callback(
     Output("series-selector-wrap", "style"),
