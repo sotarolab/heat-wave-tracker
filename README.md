@@ -47,6 +47,19 @@ MLflow, data contracts, a golden backtest, drift monitoring, retraining).
   subagents kept in `.claude/`, and which parts a person reads line by line.
 - [docs/decisions/](docs/decisions/): one page per decision, dated.
 
+## Run the new page locally
+
+The service and the client that replace the Dash page are in `service/` and
+`client/`. They read the same forecast file.
+
+```bash
+pip install -r requirements.txt
+uvicorn service.app:app --port 8051      # the API and field images
+cd client && npm ci && npm run dev       # the page, proxying /api to 8051
+```
+
+`npm run build` writes `client/dist`, which the service then serves at `/`.
+
 ## Run it locally
 
 ```bash
