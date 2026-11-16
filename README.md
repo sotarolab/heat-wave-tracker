@@ -3,10 +3,14 @@
 [![Tests](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/tests.yml/badge.svg)](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/tests.yml)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
 
-A live dashboard tracking the July 2026 CONUS heat wave: GFS forecast
-(temperature, Heat Index, NWS risk levels) over 165 US cities, animated
-over the full forecast window, with real observations pulled from
-NOAA's ASOS network on click, and a "Hottest Cities" leaderboard.
+**Live: https://heat-wave-tracker.onrender.com**
+
+A live dashboard of the GFS forecast (temperature, Heat Index, NWS risk
+levels) over 165 US cities, animated over the full forecast window, with
+real observations pulled from NOAA's ASOS network on click. It began as
+a tracker for the July 2026 CONUS heat wave and now runs year-round. The
+header shows the forecast cycle on the page and marks it stale when the
+six-hourly refresh has not run.
 
 Built with Python, Dash/Plotly, and NOAA's GFS + ASOS data.
 
