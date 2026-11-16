@@ -1,6 +1,6 @@
 # US Heat Wave Tracker
 
-[![Tests](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/tests.yml/badge.svg)](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/tests.yml)
+[![QC](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/qc.yml/badge.svg)](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/qc.yml)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
 
 **Live: https://heat-wave-tracker.onrender.com**
@@ -31,6 +31,21 @@ Each station panel goes past a plain forecast line:
   checked against a 54-year historical temperature record using a
   Generalized Extreme Value (GEV) fit, answering "how rare is this,
   historically, at this specific city."
+
+## Where this is going, and how it is built
+
+The page is being rebuilt as one FastAPI service and one React page around
+the correction model, with a tracked model lifecycle (training as a script,
+MLflow, data contracts, a golden backtest, drift monitoring, retraining).
+
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the system, the model
+  lifecycle and the layering, as diagrams, with what is built and what is
+  planned.
+- [docs/PLAN.md](docs/PLAN.md): the order of work, one issue per step.
+- [docs/process/WORKFLOW.md](docs/process/WORKFLOW.md): the code is written
+  with AI agents under gates. This page lists the gates, the skills and
+  subagents kept in `.claude/`, and which parts a person reads line by line.
+- [docs/decisions/](docs/decisions/): one page per decision, dated.
 
 ## Run it locally
 
