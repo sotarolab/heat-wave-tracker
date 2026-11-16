@@ -20,4 +20,13 @@ ignore = ["E501"]  # line length is left to the formatter in the new packages
 [tool.mypy]
 # Strict on the modules written under the gate. Each PR that adds a package adds it here.
 strict = true
-files = ["src/heat/freshness.py", "scripts/check_phrases.py"]
+files = ["service", "src/heat/freshness.py", "scripts/check_phrases.py"]
+
+[[tool.mypy.overrides]]
+# Science modules written before the gate are imported by gated code but not checked here.
+module = ["src.heat.*"]
+ignore_errors = true
+
+[[tool.mypy.overrides]]
+module = ["src.heat.freshness"]
+ignore_errors = false

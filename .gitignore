@@ -23,3 +23,7 @@ data/da/
 # committed with their outputs, which carry aggregate statistics only.
 notebooks/artifacts/
 notebooks/__pycache__/
+
+# The client's dependencies and build output
+client/node_modules/
+client/dist/

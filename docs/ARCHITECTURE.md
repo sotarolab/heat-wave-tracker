@@ -57,7 +57,7 @@ flowchart LR
 |---|---|---|
 | GFS fetch, pair logging, shadow inference, commit and deploy hook | built | |
 | Dash page (`app.py`) | built, retired at the cutover | #39 |
-| `service/` and `client/`: Map, Satellite | planned | #35 |
+| `service/` and `client/`: Map, Satellite | built, served at the cutover | #35, #39 |
 | Forecast and Stations tabs | planned | #36 |
 | `build_lab` and the Lab tab | planned | #38 |
 | Upper air overlays, deep stations from the ledger | planned | #41 |
