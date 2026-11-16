@@ -8,3 +8,8 @@ pandas<3.0
 scipy
 requests
 pytest>=8.0
+# The gates in .github/workflows/qc.yml
+ruff==0.15.20
+mypy>=1.11
+pandas-stubs
+pre-commit

@@ -8,7 +8,6 @@ GFS-fetching stack. All synthetic, no network involved anywhere in this
 module.
 """
 import pandas as pd
-import pytest
 
 from src.heat.historical import filter_annual_max_outliers
 

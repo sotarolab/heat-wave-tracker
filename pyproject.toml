@@ -1,3 +1,23 @@
 [tool.pytest.ini_options]
 pythonpath = ["."]
 testpaths = ["tests"]
+
+[tool.ruff]
+# The notebooks keep their exploratory style. app.py is the Dash page and is removed at the
+# cutover (docs/PLAN.md), so it is not brought up to the gate.
+extend-exclude = ["notebooks", "app.py"]
+
+[tool.ruff.lint]
+select = ["E", "F"]
+ignore = ["E501"]  # line length is left to the formatter in the new packages
+
+[tool.ruff.lint.per-file-ignores]
+# Science modules written before the gate. Their lines are left as they were read and
+# reviewed; new modules get no entries here.
+"src/heat/correction.py" = ["E702", "F841"]
+"scripts/log_corrections.py" = ["E741"]
+
+[tool.mypy]
+# Strict on the modules written under the gate. Each PR that adds a package adds it here.
+strict = true
+files = ["src/heat/freshness.py", "scripts/check_phrases.py"]
