@@ -1,0 +1,49 @@
+name: QC
+
+# The gates every pull request passes. docs/process/WORKFLOW.md lists them; the `pr` skill
+# runs the same commands before a pull request is opened.
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+jobs:
+  python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+      - name: Install test dependencies
+        run: pip install -r requirements-dev.txt
+      - name: Lint
+        run: ruff check .
+      - name: Types (modules written under the gate)
+        run: mypy
+      - name: Writing rules
+        run: python scripts/check_phrases.py
+      - name: Tests
+        run: pytest -q
+
+  client:
+    # The client arrives with issue #35. Until then this job has nothing to build.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - id: has
+        run: echo "client=$([ -f client/package.json ] && echo yes || echo no)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@v4
+        if: steps.has.outputs.client == 'yes'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - name: Build and test
+        if: steps.has.outputs.client == 'yes'
+        working-directory: client
+        run: |
+          npm ci
+          npm run build
+          npx vitest run

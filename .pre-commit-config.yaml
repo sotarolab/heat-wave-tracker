@@ -1,0 +1,13 @@
+# The same checks qc.yml runs, at commit time. Install once: pre-commit install
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.15.20
+    hooks:
+      - id: ruff-check
+  - repo: local
+    hooks:
+      - id: writing-rules
+        name: writing rules (no em dashes, plain prose)
+        entry: python scripts/check_phrases.py
+        language: system
+        types: [text]

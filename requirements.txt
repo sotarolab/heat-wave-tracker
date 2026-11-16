@@ -16,3 +16,6 @@ gunicorn
 tzdata
 pyarrow
 psycopg2-binary
+# The service that replaces the Dash page at the cutover (docs/PLAN.md)
+fastapi
+uvicorn
