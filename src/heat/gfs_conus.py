@@ -41,24 +41,31 @@ CONUS_BBOX = [-127.0, 23.0, -65.0, 51.0]
 DEFAULT_OUT = Path("data") / "conus_heat_tracker.nc"
 
 
-def _latest_gfs_init() -> pd.Timestamp:
+def _latest_gfs_init(now: pd.Timestamp | None = None) -> pd.Timestamp:
     """Most recent GFS init time likely available on NOAA AWS.
 
     GFS publishes roughly 4 hours after initialization, so this steps
     back through the 4 daily cycles (18Z, 12Z, 6Z, 0Z) until it finds
-    one old enough to plausibly be published already.
+    one old enough to plausibly be published already. Before 04Z none
+    of today's cycles is, and the answer is yesterday's 18Z.
+
+    Parameters
+    ----------
+    now : pd.Timestamp, optional
+        The current time, UTC. Defaults to the clock; passed in tests.
 
     Returns
     -------
     pd.Timestamp
-        Candidate init time, UTC, tz-naive.
+        Candidate init time, UTC.
     """
-    now = pd.Timestamp.utcnow()
+    if now is None:
+        now = pd.Timestamp.now(tz="UTC")
     for cycle_h in (18, 12, 6, 0):
         candidate = now.floor("D") + pd.Timedelta(hours=cycle_h)
         if (now - candidate).total_seconds() >= 4 * 3600:
             return candidate
-    return now.floor("D")
+    return now.floor("D") - pd.Timedelta(hours=6)
 
 
 def fetch_gfs_conus(
