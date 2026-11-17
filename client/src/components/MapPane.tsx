@@ -30,7 +30,7 @@ function Scale({ legend, unit }: { legend: Legend; unit: Unit }) {
 
 /** The forecast over the lower 48: one GFS field at a time, stepped through the next five days, with
  *  every station on it in the same colours, and radar or satellite over it for what is there now. */
-export function MapPane({ unit, onUnit, tick }: { unit: Unit; onUnit: (u: Unit) => void; tick: number }) {
+export function MapPane({ unit, onUnit, onStation, tick }: { unit: Unit; onUnit: (u: Unit) => void; onStation: (id: string) => void; tick: number }) {
   const meta = useFetch((s) => api.fieldMeta(unit, s), [unit], tick)
   const net = useFetch((s) => api.stations(unit, s), [unit], tick)
   const [varId, setVarId] = useState('t2m')
@@ -51,14 +51,17 @@ export function MapPane({ unit, onUnit, tick }: { unit: Unit; onUnit: (u: Unit) 
     return () => clearInterval(id)
   }, [playing, count, start])
 
-  const values = variable && net.data?.unit === unit ? net.data.values[variable.id] : undefined
+  // While a change of unit is in flight the map keeps the old numbers; they keep the old unit's label
+  // (`shown`), and the dots wait until they are in the same unit as the scale they are coloured by.
+  const shown = meta.data?.unit ?? unit
+  const values = variable && net.data?.unit === shown ? net.data.values[variable.id] : undefined
   const dots = useMemo(() => {
     if (!showDots || !net.data || !values || !variable) return NO_DOTS
     return net.data.stations.map((s, k) => {
       const v = values[k]?.[i] ?? null
-      return { id: s.id, lat: s.lat, lon: s.lon, color: dotColor(v, variable.legend), label: `${s.name} (${s.id}) · ${v == null ? 'no value' : `${v}°${unit}`}` }
+      return { id: s.id, lat: s.lat, lon: s.lon, color: dotColor(v, variable.legend), label: `${s.name} (${s.id}) · ${v == null ? 'no value' : `${v}°${shown}`}` }
     })
-  }, [showDots, net.data, values, variable, i, unit])
+  }, [showDots, net.data, values, variable, i, shown])
 
   if (!meta.data || !variable) return <section className="panel"><p className="todo">{meta.error ?? 'Reading the forecast…'}</p></section>
   const pick = (id: string) => { setVarId(id); setFrame(null); setPlaying(false) }
@@ -94,16 +97,17 @@ export function MapPane({ unit, onUnit, tick }: { unit: Unit; onUnit: (u: Unit) 
           onChange={(e) => { setPlaying(false); setFrame(Number(e.target.value)) }} />
         <span className="stamp">{variable.frames[i]?.label}{meta.error && ` · refresh failed: ${meta.error}`}</span>
       </div>
-      <Scale legend={variable.legend} unit={unit} />
+      <Scale legend={variable.legend} unit={shown} />
       {at && (
         <p className="headline">
-          {at.name}, {at.state}: <span className="num">{atValue == null ? 'no value' : `${atValue}°${unit}`}</span>
-          <span className="note"> {variable.label.toLowerCase()}, {variable.frames[i]?.label}</span>
+          {at.name}: <span className="num">{atValue == null ? 'no value' : `${atValue}°${shown}`}</span>
+          <span className="note"> {variable.label.toLowerCase()}, {variable.frames[i]?.label} </span>
+          <button className="acct" onClick={() => onStation(at.id)}>Open its forecast</button>
         </p>
       )}
       <p className="note">
         {variable.label}: {variable.note}. One model, GFS, at a quarter of a degree; each station shows the grid point nearest it.
-        Radar and satellite are what is there now, whatever forecast time the slider is on. Click a station for its value.
+        Radar and satellite are what is there now, whatever forecast time the slider is on. Click a station for its value, then open its forecast.
       </p>
     </section>
   )

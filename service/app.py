@@ -21,8 +21,9 @@ from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.responses import HTMLResponse
 from fastapi.staticfiles import StaticFiles
 
-from service import fields, live, payloads
+from service import fields, live, payloads, sources, station
 from src.heat.gfs_conus import DEFAULT_OUT, load_or_fetch
+from src.heat.stations import get_station
 
 app = FastAPI(title="US nowcast", version="0.1")
 # The stations table is 20,000 numbers; it compresses to a fifth.
@@ -32,7 +33,8 @@ app.add_middleware(GZipMiddleware, minimum_size=2000)
 @lru_cache(maxsize=1)
 def _open() -> xr.Dataset | None:
     """The committed forecast file, read into memory once: about 30 MB, and every route reads it."""
-    ds = load_or_fetch(DEFAULT_OUT)
+    # HEAT_FORECAST_FILE points a development run at a forecast fetched somewhere else.
+    ds = load_or_fetch(Path(os.environ.get("HEAT_FORECAST_FILE", DEFAULT_OUT)))
     return None if ds is None else ds.load()
 
 
@@ -66,6 +68,25 @@ def manifest(ds: Forecast) -> dict[str, Any]:
 @app.get("/api/stations")
 def stations(ds: Forecast, unit: payloads.Unit = "F") -> Any:
     return live.cached(f"stations:{payloads.cycle(ds)}:{unit}", live.FOREVER, lambda: payloads.stations(ds, unit))
+
+
+@app.get("/api/network")
+def network(ds: Forecast, unit: payloads.Unit = "F") -> dict[str, Any]:
+    now = _now()
+    latest = sources.network_latest([str(s["id"]) for s in payloads.STATIONS], now)
+    return payloads.network(ds, latest, unit, now, sources.NETWORK_WINDOW_H)
+
+
+@app.get("/api/station/{station_id}")
+def station_page(station_id: str, ds: Forecast, unit: payloads.Unit = "F") -> dict[str, Any]:
+    stn = get_station(station_id.upper())
+    if stn is None:
+        raise HTTPException(404, f"No such station: {station_id}")
+    lines = sources.ml_lines(str(ds.attrs.get("gfs_init", ""))) or {}
+    return station.build(
+        ds, stn, sources.observations(stn["id"]), lines.get(stn["id"]), sources.ml_verification(), unit, _now(),
+        sources.models(stn["id"], stn["lat"], stn["lon"]),
+    )
 
 
 @app.get("/api/field/meta")

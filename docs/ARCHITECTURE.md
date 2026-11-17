@@ -19,6 +19,7 @@ flowchart LR
     ASOS["ASOS observations, IEM"]
     CLI["Climate reports, IEM"]
     LEDGER["Model ledger digest, sotarolab/vaguada"]
+    OM["HRRR and NBM at a station, Open-Meteo"]
     TILES["Radar and GOES tiles, IEM and NOAA"]
   end
   subgraph jobs ["GitHub Actions, every 6 h"]
@@ -49,6 +50,7 @@ flowchart LR
   NEON -- once at startup --> SVC
   ASOS -- on request, cached --> SVC
   LEDGER -- on request, cached --> SVC
+  OM -- on request, cached --> SVC
   SVC -- /api --> PAGE
   TILES --> PAGE
 ```
@@ -58,7 +60,7 @@ flowchart LR
 | GFS fetch, pair logging, shadow inference, commit and deploy hook | built | |
 | Dash page (`app.py`) | built, retired at the cutover | #39 |
 | `service/` and `client/`: Map, Satellite | built, served at the cutover | #35, #39 |
-| Forecast and Stations tabs | planned | #36 |
+| Forecast and Stations tabs | built, served at the cutover | #36, #39 |
 | `build_lab` and the Lab tab | planned | #38 |
 | Upper air overlays, deep stations from the ledger | planned | #41 |
 | `build_analysis` and the analysis overlay | planned | #42 |
@@ -87,6 +89,12 @@ sequenceDiagram
   S-->>B: JSON, numbers final
   B->>B: draw
 ```
+
+One computation is done on request, and it is the exception that shows the rule. The
+same-day correction on the Forecast tab is the mean error of today's forecast at one
+station, from observations that arrive between the six-hourly jobs. It is one call to
+`src/heat/bias.py` on cached observations, it trains nothing, and it is labelled apart
+from the learned correction, which is always read as logged.
 
 Rules that follow from it:
 
@@ -125,6 +133,7 @@ flowchart TD
 | Training in notebooks 03 and 05, results in `ml/EXPERIMENTS.md` | built | |
 | Training as a script, MLflow, data contracts, golden backtest, model card | planned | #37 |
 | Scorecard by lead, coverage, SHAP, feature importance | planned | #38 |
+| The correction trained on HRRR, scored beside the GFS-based one | planned | #48 |
 | Drift report, skill decay, retraining, promotion by pull request | planned | #40 |
 
 ## 4. Layering

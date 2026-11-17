@@ -60,6 +60,10 @@ cd client && npm ci && npm run dev       # the page, proxying /api to 8051
 
 `npm run build` writes `client/dist`, which the service then serves at `/`.
 
+The learned correction and its scored record are read from the forecast
+archive. Set `NEON_DATABASE_URL` to see them locally; without it the page
+shows the observations, the models and the same-day correction.
+
 ## Run it locally
 
 ```bash

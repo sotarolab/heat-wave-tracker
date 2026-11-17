@@ -20,6 +20,8 @@ from src.heat.freshness import age_hours, badge
 from src.heat.stations import MAJOR_CONUS_STATIONS
 
 Unit = Literal["F", "C"]
+# The station list predates the type gate; this names its shape for the code that reads it.
+STATIONS: list[dict[str, Any]] = MAJOR_CONUS_STATIONS
 # One clock for a map that spans four time zones, as the national products use.
 DISPLAY_TZ = ZoneInfo("America/New_York")
 
@@ -115,12 +117,58 @@ def manifest(ds: xr.Dataset, now: pd.Timestamp, commit: str | None) -> dict[str,
     init = str(ds.attrs.get("gfs_init", ""))
     text, live = badge(init, now)
     age = age_hours(init, now)
+    try:
+        label = pd.Timestamp(init).strftime("GFS %HZ %b %-d")
+    except (ValueError, TypeError):
+        label = "No forecast"
     return {
         "init": init,
+        "label": label if init else "No forecast",
         "age_h": None if age is None else round(age, 1),
         "badge": text,
         "live": live,
         "steps": int(ds.sizes["time"]),
         "stations": len(MAJOR_CONUS_STATIONS),
         "commit": commit,
+    }
+
+
+def network(ds: xr.Dataset, latest: dict[str, tuple[float, pd.Timestamp]] | None, unit: Unit, now: pd.Timestamp, window_h: int = 2) -> dict[str, Any]:
+    """Every station in one table: what it reads now, what the forecast said for now, and the next two highs.
+
+    `latest` is each station's most recent temperature in Celsius and its time, or None when the
+    network feed is unavailable; the forecast columns are filled either way.
+    """
+    lat = xr.DataArray([s["lat"] for s in STATIONS], dims="station")
+    lon = xr.DataArray([s["lon"] for s in STATIONS], dims="station")
+    at = ds["t2m"].sel(latitude=lat, longitude=lon, method="nearest").values.astype(float)  # (time, station)
+    times = _times(ds)
+    current = now <= times[-1]
+    step = int(np.abs((times - now).total_seconds()).argmin())
+
+    def num(c: float | None, delta: bool = False) -> float | None:
+        if c is None or np.isnan(c):
+            return None
+        return round(float(c * 9.0 / 5.0 if delta and unit == "F" else c if delta else _out(c, unit)), 1)
+
+    rows = []
+    for k, s in enumerate(STATIONS):
+        local = times.tz_convert(ZoneInfo(s["tz"]))
+        today = now.tz_convert(ZoneInfo(s["tz"])).normalize()
+        days = local.normalize()
+        high = [float(np.nanmax(at[days == d, k])) if (days == d).any() else None for d in (today, today + pd.Timedelta(days=1))]
+        obs = latest.get(s["id"]) if latest and current else None
+        fcst = float(at[step, k]) if current else None
+        rows.append({
+            "id": s["id"], "name": s["name"], "state": s["state"], "lat": s["lat"], "lon": s["lon"],
+            "observed": num(obs[0]) if obs else None,
+            "observed_min_ago": None if not obs else int((now - obs[1]).total_seconds() // 60),
+            "forecast": num(fcst),
+            "error": num(obs[0] - fcst, delta=True) if obs and fcst is not None else None,
+            "high_today": num(high[0]), "high_tomorrow": num(high[1]),
+        })
+    errors: list[float] = [abs(float(r["error"])) for r in rows if r["error"] is not None]
+    return {
+        "unit": unit, "current": current, "window_h": window_h, "reporting": sum(r["observed"] is not None for r in rows), "stations": len(rows),
+        "mean_abs_error": round(float(np.mean(errors)), 1) if errors else None, "rows": rows,
     }
