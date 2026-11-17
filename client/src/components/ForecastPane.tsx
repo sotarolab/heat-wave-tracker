@@ -39,7 +39,9 @@ export function ForecastPane({ station, unit, tick }: { station: string; unit: U
           {' '}<b>Corrected with today's observations</b> shifts GFS by its mean error so far today, for the next {page.same_day_hours} hours; the shaded band
           is a 95% prediction interval from today's residuals. <b>Learned correction</b> is a gradient-boosted model trained on the archive
           of past forecasts and observations, with a calibrated band; it is logged each cycle before the observations arrive
-          {page.has_learned ? '' : ', and has no rows for this cycle'}. HRRR and NBM are the latest runs, raw, for the hours ahead.
+          {page.has_learned ? '' : ', and has no rows for this cycle'}.
+          {page.anchor_hours != null && ` Both corrected lines start at the station's latest reading: the gap to it is applied in full there and fades over ${page.anchor_hours} hours, the same-day line to today's mean error and the learned line to its logged value. The thin dashed line is the learned correction as it was logged, for the hours already observed.`}
+          {' '}HRRR and NBM are the latest runs, raw, for the hours ahead.
           Times are the station's own. The dashed rule is now.{f.error && ` Refresh failed: ${f.error}.`}
         </p>
       </section>

@@ -8,7 +8,7 @@ interval. All synthetic, no network involved anywhere in this module.
 import pandas as pd
 import pytest
 
-from src.heat.bias import (today_forecast_bias, brier_score_exceedance,
+from src.heat.bias import (anchor_to_observation, today_forecast_bias, brier_score_exceedance,
                            BIAS_MIN_PAIRS, PI_MIN_PAIRS, BIAS_MATCH_TOLERANCE)
 
 TZ = "America/New_York"
@@ -370,3 +370,32 @@ class TestPI95Halfwidth:
         assert result["n_used"] == 24
         naive_1_96 = 1.96 * result["sigma"]
         assert result["pi95_halfwidth"] == pytest.approx(naive_1_96, rel=0.15)
+
+
+class TestAnchorToObservation:
+    """A forecast line tied to the latest reading: the whole gap at the reading, fading after."""
+
+    T0 = pd.Timestamp("2026-07-15 12:00", tz="UTC")
+
+    def line(self):
+        return pd.Series([20.0, 22.0, 24.0, 26.0, 28.0, 30.0], index=pd.date_range(self.T0, periods=6, freq="2h"))
+
+    def test_starts_at_the_reading_and_fades_to_the_line(self):
+        obs_time = self.T0 + pd.Timedelta(hours=1)  # between two forecast points: the line is 21 there
+        out = anchor_to_observation(self.line(), obs_time, 24.0, relax_hours=6.0)
+        assert out.index[0] == obs_time and out.iloc[0] == 24.0
+        # A gap of 3 at the reading; one hour on a sixth has faded, seven hours on all of it.
+        assert out[self.T0 + pd.Timedelta(hours=2)] == pytest.approx(22.0 + 3.0 * 5 / 6)
+        assert out[self.T0 + pd.Timedelta(hours=8)] == 28.0 and out[self.T0 + pd.Timedelta(hours=10)] == 30.0
+        assert self.T0 not in out.index  # nothing before the reading
+
+    def test_settles_on_the_shift_it_is_given(self):
+        out = anchor_to_observation(self.line(), self.T0, 23.0, relax_hours=4.0, settle=1.0)
+        assert out[self.T0 + pd.Timedelta(hours=2)] == pytest.approx(22.0 + 2.0)  # halfway from a gap of 3 to 1
+        assert out[self.T0 + pd.Timedelta(hours=4)] == pytest.approx(24.0 + 1.0) and out[self.T0 + pd.Timedelta(hours=10)] == pytest.approx(31.0)
+
+    def test_a_reading_the_line_does_not_reach_or_a_missing_one_gives_nothing(self):
+        assert anchor_to_observation(self.line(), self.T0 - pd.Timedelta(hours=1), 20.0) is None
+        assert anchor_to_observation(self.line(), self.T0 + pd.Timedelta(hours=11), 20.0) is None
+        assert anchor_to_observation(self.line(), self.T0, float("nan")) is None
+        assert anchor_to_observation(self.line().iloc[:0], self.T0, 20.0) is None

@@ -28,10 +28,11 @@ import xarray as xr
 
 from service.payloads import Unit
 from service.sources import MODELS
-from src.heat.bias import BIAS_MIN_PAIRS, today_forecast_bias
+from src.heat.bias import ANCHOR_RELAX_HOURS, BIAS_MIN_PAIRS, anchor_to_observation, today_forecast_bias
 from src.heat.compute import heat_index_array
 
 SAME_DAY_HOURS = 24  # how far ahead today's mean error is taken to say anything
+ANCHOR_MAX_AGE_MIN = 90  # an older reading says too little about now to tie a line to
 LOOK_BACK_HOURS = 36
 ML_BEHIND_HOURS, ML_AHEAD_HOURS = 24, 48
 
@@ -184,14 +185,40 @@ def build(
         local.index = pd.DatetimeIndex(local.index).tz_convert(tz)
         bias[key] = None if now_obs is None else today_forecast_bias(local, o, col, now_obs.date(), now_obs)
 
-    ahead = (raw["t2m"].index > now) & (raw["t2m"].index <= now + pd.Timedelta(hours=SAME_DAY_HOURS))
-    same_day = {k: (raw[k][ahead] + b["bias"]) if (b := bias[k]) else None for k in raw}
+    # A corrected line starts at the station's latest reading when there is a recent one: the gap
+    # to it is applied in full there and fades (bias.anchor_to_observation). Without one the line
+    # is drawn as before, from the next forecast step.
+    t_obs = o["valid_utc"].iloc[-1].floor("min") if len(o) else None
+    if t_obs is not None and not pd.Timedelta(0) <= now - t_obs <= pd.Timedelta(minutes=ANCHOR_MAX_AGE_MIN):
+        t_obs = None
+
+    def tied(series: pd.Series, col: str, settle: float) -> pd.Series | None:
+        return None if t_obs is None else anchor_to_observation(series, t_obs, float(o[col].iloc[-1]), settle=settle)
+
+    horizon = now + pd.Timedelta(hours=SAME_DAY_HOURS)
+    same_day: dict[str, pd.Series | None] = {}
+    for key, col in (("t2m", "temp_c"), ("hi", "hi_c")):
+        b = bias[key]
+        if not b:
+            same_day[key] = None
+            continue
+        # Tied to the reading, the shift fades to today's mean error; untied, it is that error throughout.
+        s = tied(raw[key], col, b["bias"])
+        s = s if s is not None else raw[key][raw[key].index > now] + b["bias"]
+        same_day[key] = s[s.index <= horizon]
     pi = bias["t2m"]["pi95_halfwidth"] if bias["t2m"] else 0.0  # an interval is claimed for temperature only
 
+    ml_logged = None  # the learned line as it was logged, for the hours that have already verified
     if ml is not None:
         ml = ml[(ml.index >= now - pd.Timedelta(hours=ML_BEHIND_HOURS)) & (ml.index <= now + pd.Timedelta(hours=ML_AHEAD_HOURS))]
         if ml.empty:
             ml = None
+    if ml is not None and (anchored := tied(ml["ml_c"], "temp_c", 0.0)) is not None:
+        shift = anchored.reindex(ml.index) - ml["ml_c"]  # the band moves with the line and keeps its width
+        ml_logged = ml["ml_c"][ml.index <= t_obs]
+        version = ml.attrs.get("version", "model")
+        ml = pd.DataFrame({"ml_c": anchored, "lo_c": (ml["lo_c"] + shift).reindex(anchored.index), "up_c": (ml["up_c"] + shift).reindex(anchored.index)})
+        ml.attrs["version"] = version
 
     # One time axis for every line: the forecast steps and the observation times in the window.
     # The observations lead in from before the forecast begins, so the day so far is on the chart.
@@ -201,6 +228,9 @@ def build(
     axis = raw["t2m"].index[raw["t2m"].index >= start].union(obs_t)
     if ml is not None:
         axis = axis.union(ml.index[ml.index >= start])
+    for s in same_day.values():
+        if s is not None:
+            axis = axis.union(s.index)
     # Other models: the hours ahead only, and nothing over a forecast that has ended.
     ahead_of_now = {} if stale or not others else {m: df[(df.index > now) & (df.index <= end)] for m, df in others.items() if m in MODELS}
     ahead_of_now = {m: df for m, df in ahead_of_now.items() if len(df)}
@@ -224,7 +254,10 @@ def build(
             band = {"band": {"lo": _column(axis, sd - pi, temp), "up": _column(axis, sd + pi, temp)}} if key == "t2m" and pi > 0 else {}
             lines.append(line("Corrected with today's observations", SAME_DAY, sd, **band))
         if key == "t2m" and ml is not None:
-            band = {"band": {"lo": _column(axis, ml["lo_c"], temp), "up": _column(axis, ml["up_c"], temp)}} if ml[["lo_c", "up_c"]].notna().all(axis=None) else {}
+            if ml_logged is not None and len(ml_logged):
+                lines.append(line("Learned correction, as logged", ML, ml_logged, dash=True, width=1))
+            banded = ml[["lo_c", "up_c"]].dropna()
+            band = {"band": {"lo": _column(axis, banded["lo_c"], temp), "up": _column(axis, banded["up_c"], temp)}} if len(banded) else {}
             lines.append(line(f"Learned correction ({ml.attrs.get('version', 'model')})", ML, ml["ml_c"], **band))
         if len(o_win):
             lines.append(line("Observed", OBS, pd.Series(o_win[col].values, index=obs_t), width=3))
@@ -302,5 +335,7 @@ def build(
         "verification": {"today": today_rows, "model": model_row},
         "has_learned": ml is not None,
         "same_day_hours": SAME_DAY_HOURS,
+        # Hours over which a corrected line's gap to the latest reading fades; null when no line is tied to one.
+        "anchor_hours": ANCHOR_RELAX_HOURS if t_obs is not None else None,
         "min_steps": BIAS_MIN_PAIRS,
     }

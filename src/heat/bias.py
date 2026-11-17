@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import math
 
+import numpy as np
 import pandas as pd
 from scipy.stats import t as _t_dist
 
@@ -304,3 +305,55 @@ def brier_score_exceedance(forecast_series: pd.Series, obs_local: pd.DataFrame,
         "brier":  float(((p_exceed - actually_exceeded) ** 2).mean()),
         "n_used": len(used),
     }
+
+
+# How long the gap between a forecast line and the latest observation is taken to last.
+# shortcut: one constant for every station and hour; fit it from the archive's error
+# autocorrelation by lead once the Lab scores the anchored line (#38).
+ANCHOR_RELAX_HOURS = 6.0
+
+
+def anchor_to_observation(line: pd.Series, obs_time: pd.Timestamp, obs_value: float,
+                          relax_hours: float = ANCHOR_RELAX_HOURS,
+                          settle: float = 0.0) -> pd.Series | None:
+    """A forecast line moved onto where the station is, for the time after an observation.
+
+    A forecast that is three degrees warm at this hour is usually still warm an hour from
+    now and less so by tomorrow. Drawn as issued, it leaves a vertical gap at the present:
+    the last observation in one place, the first forecast point in another. Here the shift
+    is not constant. At the observation it is the whole gap, so the line leaves the latest
+    report instead of jumping away from it. It slides linearly to `settle` over
+    `relax_hours` and holds there.
+
+    Parameters
+    ----------
+    line : pd.Series
+        The forecast, indexed by tz-aware timestamps in increasing order.
+    obs_time : pd.Timestamp
+        When the latest observation was made.
+    obs_value : float
+        What it read, in the line's unit.
+    relax_hours : float, optional
+        Hours over which the gap fades.
+    settle : float, optional
+        The shift that remains after the gap has faded. Zero leaves the line as issued at
+        long range. The same-day correction passes today's mean error, which is the part of
+        the gap the day's record says persists.
+
+    Returns
+    -------
+    pd.Series or None
+        The observation itself as the first point, then the line's own points after
+        `obs_time`, shifted. None when the line does not reach `obs_time`, so there is no
+        value of the line to measure the gap against, or when the observation is missing.
+    """
+    line = line.dropna()
+    if line.empty or obs_value != obs_value or not line.index[0] <= obs_time <= line.index[-1]:
+        return None
+    seconds = line.index.astype("int64") // 10**9
+    at_obs = float(np.interp(obs_time.value // 10**9, seconds, line.to_numpy(dtype=float)))
+    gap = obs_value - at_obs
+    after = line[line.index > obs_time]
+    faded = np.clip((after.index - obs_time).total_seconds() / (relax_hours * 3600.0), 0.0, 1.0)
+    shifted = after + gap + (settle - gap) * faded
+    return pd.concat([pd.Series([obs_value], index=pd.DatetimeIndex([obs_time])), shifted])
