@@ -26,7 +26,13 @@ NETWORK_WINDOW_H = 2
 DB_TTL_S = 10 * 60
 MODELS_TTL_S = 60 * 60
 # Other models at the station, by way of Open-Meteo: the label on the chart and the colour token.
-MODELS = {"gfs_hrrr": ("HRRR", "--series-1"), "ncep_nbm_conus": ("NBM", "--series-3")}
+# GFS is listed for the variables the committed forecast file does not carry.
+MODELS = {"gfs_global": ("GFS", "--raw"), "gfs_hrrr": ("HRRR", "--series-1"), "ncep_nbm_conus": ("NBM", "--series-3")}
+# Open-Meteo's name for each variable and the column it becomes: Celsius, percent, km/h, mm, hPa.
+MODEL_VARS = {
+    "temperature_2m": "temp_c", "dew_point_2m": "dewpoint_c", "relative_humidity_2m": "rh", "wind_speed_10m": "wind_kmh",
+    "precipitation": "precip_mm", "cloud_cover": "cloud_pct", "pressure_msl": "pressure_hpa",
+}
 OPEN_METEO = "https://api.open-meteo.com/v1/forecast"
 # IEM answers requests sent in quick succession with 429. Calls to it go one at a time, spaced.
 IEM_GAP_S = 1.5
@@ -88,26 +94,31 @@ def network_latest(station_ids: list[str], now: pd.Timestamp) -> dict[str, tuple
         return None
 
 
-def models(station_id: str, lat: float, lon: float) -> dict[str, pd.Series] | None:
-    """The latest HRRR and NBM temperature at the station for the hours ahead, Celsius by UTC time.
+def models(station_id: str, lat: float, lon: float) -> dict[str, pd.DataFrame] | None:
+    """The latest GFS, HRRR and NBM at the station for the hours ahead: one frame per model,
+    columns as in MODEL_VARS, by UTC time.
 
     Only the hours ahead are asked for. Open-Meteo fills past hours with each model's most
     recent run, which would sit beside the observations looking better than any forecast
     that was actually issued.
     """
 
-    def fetch() -> dict[str, pd.Series]:
+    def fetch() -> dict[str, pd.DataFrame]:
         r = requests.get(
             OPEN_METEO,
-            params={"latitude": str(lat), "longitude": str(lon), "hourly": "temperature_2m", "models": ",".join(MODELS),
+            params={"latitude": str(lat), "longitude": str(lon), "hourly": ",".join(MODEL_VARS), "models": ",".join(MODELS),
                     "past_hours": "0", "forecast_hours": "72", "timeformat": "unixtime", "timezone": "UTC"},
             timeout=15,
         )
         r.raise_for_status()
         hourly = r.json()["hourly"]
         index = pd.to_datetime(hourly["time"], unit="s", utc=True)
-        out = {m: pd.Series(hourly.get(f"temperature_2m_{m}"), index=index, dtype=float).dropna() for m in MODELS}
-        return {m: s for m, s in out.items() if len(s)}
+        out = {}
+        for m in MODELS:
+            df = pd.DataFrame({col: pd.Series(hourly.get(f"{var}_{m}"), index=index, dtype=float) for var, col in MODEL_VARS.items()})
+            if df.notna().any(axis=None):
+                out[m] = df
+        return out
 
     try:
         return live.cached(f"models:{station_id}", MODELS_TTL_S, fetch)  # type: ignore[no-any-return]

@@ -44,7 +44,11 @@ export interface ChartLine {
   dash?: boolean
   width?: number
   band?: { lo: (number | null)[]; up: (number | null)[] }
+  /** Sparse readings (gusts): drawn as points, not joined across the gaps. */
+  dots?: boolean
 }
+/** One variable's chart: its lines on the page's time axis, in `unit`, with hard limits where it has them. */
+export interface ChartSpec { id: string; label: string; unit: string; lines: ChartLine[]; floor?: number; ceil?: number }
 export interface Tile { label: string; value: string; note: string }
 export interface TodayRow { metric: string; n: number; bias: number; rmse: number; interval: number | null }
 export interface ModelRecord {
@@ -67,7 +71,8 @@ export interface StationPage {
   /** Epoch seconds: the one time axis every line's values follow. */
   time: number[]
   now: number
-  charts: { t2m: ChartLine[]; hi: ChartLine[] }
+  /** Temperature and feels like first, then the other variables, each only where it has a line. */
+  charts: ChartSpec[]
   verification: { today: TodayRow[]; model: ModelRecord | null }
   has_learned: boolean
   /** How far ahead the same-day correction is drawn, and how many verified steps it needs. */

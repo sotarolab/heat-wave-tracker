@@ -10,12 +10,15 @@ output. Two corrections are shown and kept apart, because they use different inf
   refresh workflow and read from the database. It is drawn as logged and never recomputed.
 
 Both correct GFS. HRRR and NBM are drawn raw beside them for the hours ahead, for comparison.
+The other variables (dew point, humidity, wind, cloud, precipitation, pressure) follow as
+observed and as each model has them, so the temperature can be read in its weather.
 
 Every number is converted and rounded here; the page draws the table as it comes.
 """
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 from zoneinfo import ZoneInfo
 
@@ -73,10 +76,87 @@ def _observed(obs: pd.DataFrame | None, tz: ZoneInfo) -> pd.DataFrame:
     return out
 
 
-def _column(index: pd.DatetimeIndex, s: pd.Series, unit: Unit) -> list[float | None]:
-    """A series laid on the chart's time axis in the display unit: null where it has no value."""
+Convert = Callable[[Any], Any]
+
+
+def _column(index: pd.DatetimeIndex, s: pd.Series, convert: Convert, digits: int = 1) -> list[float | None]:
+    """A series laid on the chart's time axis, converted for display: null where it has no value."""
     v = s[~s.index.duplicated()].reindex(index)
-    return [None if np.isnan(x) else round(float(_val(x, unit)), 1) for x in v.values]
+    return [None if np.isnan(x) else round(float(convert(x)), digits) for x in v.values]
+
+
+def _picture(
+    axis: pd.DatetimeIndex,
+    o: pd.DataFrame,
+    obs_t: pd.DatetimeIndex,
+    ahead: dict[str, pd.DataFrame],
+    raw_td: pd.Series | None,
+    unit: Unit,
+) -> list[dict[str, Any]]:
+    """The other variables, each as observed and as GFS, HRRR and NBM have it for the hours ahead.
+
+    Metric in, display units out: degrees as asked, wind in mph or km/h, precipitation in inches
+    or millimetres with them. Precipitation is a running total: what the station measured over the
+    window, and each model's amount added on from now, so the curves continue where the gauge stopped.
+    """
+    us = unit == "F"
+    deg, wind_unit, rain_unit = f"°{unit}", " mph" if us else " km/h", " in" if us else " mm"
+    temp: Convert = lambda c: _val(c, unit)  # noqa: E731
+    wind: Convert = lambda kmh: kmh * 0.621371 if us else kmh  # noqa: E731
+    rain: Convert = lambda mm: mm / 25.4 if us else mm  # noqa: E731
+    same: Convert = lambda v: v  # noqa: E731
+
+    def observed(col: str, scale: float = 1.0) -> pd.Series | None:
+        if col not in o or not o[col].notna().any():
+            return None
+        return pd.Series(o[col].to_numpy(dtype=float) * scale, index=obs_t)
+
+    def chart(cid: str, label: str, unit_text: str, model_col: str, convert: Convert, digits: int,
+              obs: pd.Series | None, extra: list[dict[str, Any]] | None = None, **limits: float) -> dict[str, Any] | None:
+        lines: list[dict[str, Any]] = [
+            {"label": MODELS[m][0], "color": MODELS[m][1], "values": _column(axis, df[model_col], convert, digits), **({"dash": True} if m == "gfs_global" else {})}
+            for m, df in ahead.items() if df[model_col].notna().any()
+        ]
+        lines += extra or []
+        if obs is not None:
+            lines.append({"label": "Observed", "color": OBS, "values": _column(axis, obs, convert, digits), "width": 3})
+        return {"id": cid, "label": label, "unit": unit_text, "lines": lines, **limits} if lines else None
+
+    # Dew point: GFS is in the forecast file as issued, so it is drawn from there, from the cycle's start.
+    td_file: list[dict[str, Any]] = [] if raw_td is None else [{"label": "GFS, raw", "color": RAW, "values": _column(axis, raw_td, temp), "dash": True}]
+    td_models = {m: df for m, df in ahead.items() if m != "gfs_global" or raw_td is None}
+    td_lines: list[dict[str, Any]] = [{"label": MODELS[m][0], "color": MODELS[m][1], "values": _column(axis, df["dewpoint_c"], temp)} for m, df in td_models.items() if df["dewpoint_c"].notna().any()]
+    td_obs = observed("dewpoint_c")
+    if td_obs is not None:
+        td_lines.append({"label": "Observed", "color": OBS, "values": _column(axis, td_obs, temp), "width": 3})
+    dew = {"id": "td", "label": "Dew point", "unit": deg, "lines": td_file + td_lines} if td_file or td_lines else None
+
+    gust = observed("wind_gust_kt", 1.852)
+    gusts: list[dict[str, Any]] = [] if gust is None else [{"label": "Observed gusts", "color": OBS, "values": _column(axis, gust, wind, 0), "dots": True}]
+
+    # Running totals. The hourly reports are summed over the window; the models continue from that total.
+    measured = observed("precip_in", 25.4)
+    total = measured.fillna(0.0).cumsum() if measured is not None else None
+    base = float(total.iloc[-1]) if total is not None and len(total) else 0.0
+    rain_ahead = {m: df.assign(precip_mm=base + df["precip_mm"].cumsum()) for m, df in ahead.items() if df["precip_mm"].notna().any()}
+    precip_lines: list[dict[str, Any]] = [
+        {"label": MODELS[m][0], "color": MODELS[m][1], "values": _column(axis, df["precip_mm"], rain, 2 if us else 1), **({"dash": True} if m == "gfs_global" else {})}
+        for m, df in rain_ahead.items()
+    ]
+    if total is not None:
+        precip_lines.append({"label": "Observed", "color": OBS, "values": _column(axis, total, rain, 2 if us else 1), "width": 3})
+    precip = {"id": "precip", "label": "Precipitation, running total", "unit": rain_unit, "lines": precip_lines, "floor": 0} if precip_lines else None
+
+    cloud_obs = observed("sky_cover", 100.0)
+    out = [
+        dew,
+        chart("rh", "Humidity", "%", "rh", same, 0, observed("rh"), floor=0, ceil=100),
+        chart("wind", "Wind", wind_unit, "wind_kmh", wind, 0, observed("wind_spd_kt", 1.852), gusts, floor=0),
+        chart("cloud", "Cloud cover", "%", "cloud_pct", same, 0, cloud_obs, floor=0, ceil=100),
+        precip,
+        chart("pressure", "Sea-level pressure", " hPa", "pressure_hpa", same, 1, observed("pressure_hpa")),
+    ]
+    return [c for c in out if c is not None]
 
 
 def build(
@@ -87,7 +167,7 @@ def build(
     model: dict[str, Any] | None,
     unit: Unit,
     now: pd.Timestamp,
-    others: dict[str, pd.Series] | None = None,
+    others: dict[str, pd.DataFrame] | None = None,
 ) -> dict[str, Any]:
     tz = ZoneInfo(stn.get("tz", "America/New_York"))
     raw = {k: _raw_series(ds, stn, k) for k in ("t2m", "hi")}
@@ -122,30 +202,35 @@ def build(
     if ml is not None:
         axis = axis.union(ml.index[ml.index >= start])
     # Other models: the hours ahead only, and nothing over a forecast that has ended.
-    ahead_of_now = {} if stale or not others else {m: s[(s.index > now) & (s.index <= end)] for m, s in others.items() if m in MODELS}
-    for s in ahead_of_now.values():
-        axis = axis.union(s.index)
+    ahead_of_now = {} if stale or not others else {m: df[(df.index > now) & (df.index <= end)] for m, df in others.items() if m in MODELS}
+    ahead_of_now = {m: df for m, df in ahead_of_now.items() if len(df)}
+    for df in ahead_of_now.values():
+        axis = axis.union(df.index)
 
     axis = pd.DatetimeIndex(axis)
+    temp: Convert = lambda c: _val(c, unit)  # noqa: E731
+    deg = f"°{unit}"
 
     def line(label: str, color: str, s: pd.Series, **extra: Any) -> dict[str, Any]:
-        return {"label": label, "color": color, "values": _column(axis, s, unit), **extra}
+        return {"label": label, "color": color, "values": _column(axis, s, temp), **extra}
 
-    charts: dict[str, list[dict[str, Any]]] = {}
-    for key, col in (("t2m", "temp_c"), ("hi", "hi_c")):
+    charts: list[dict[str, Any]] = []
+    for key, col, title in (("t2m", "temp_c", "Temperature"), ("hi", "hi_c", "Feels like")):
         lines = [line("GFS, raw", RAW, raw[key], dash=True)]
-        if key == "t2m":
-            lines += [line(f"{MODELS[m][0]}, raw", MODELS[m][1], s) for m, s in ahead_of_now.items() if len(s)]
+        if key == "t2m":  # the file's GFS is the one drawn here, as issued
+            lines += [line(f"{MODELS[m][0]}, raw", MODELS[m][1], df["temp_c"]) for m, df in ahead_of_now.items() if m != "gfs_global" and df["temp_c"].notna().any()]
         sd = same_day[key]
         if sd is not None and len(sd):
-            band = {"band": {"lo": _column(axis, sd - pi, unit), "up": _column(axis, sd + pi, unit)}} if key == "t2m" and pi > 0 else {}
+            band = {"band": {"lo": _column(axis, sd - pi, temp), "up": _column(axis, sd + pi, temp)}} if key == "t2m" and pi > 0 else {}
             lines.append(line("Corrected with today's observations", SAME_DAY, sd, **band))
         if key == "t2m" and ml is not None:
-            band = {"band": {"lo": _column(axis, ml["lo_c"], unit), "up": _column(axis, ml["up_c"], unit)}} if ml[["lo_c", "up_c"]].notna().all(axis=None) else {}
+            band = {"band": {"lo": _column(axis, ml["lo_c"], temp), "up": _column(axis, ml["up_c"], temp)}} if ml[["lo_c", "up_c"]].notna().all(axis=None) else {}
             lines.append(line(f"Learned correction ({ml.attrs.get('version', 'model')})", ML, ml["ml_c"], **band))
         if len(o_win):
             lines.append(line("Observed", OBS, pd.Series(o_win[col].values, index=obs_t), width=3))
-        charts[key] = lines
+        charts.append({"id": key, "label": title, "unit": deg, "lines": lines})
+    raw_td = _raw_series(ds, stn, "td2m") if "td2m" in ds else None
+    charts += _picture(axis, o_win, obs_t, ahead_of_now, raw_td, unit)
 
     # Today's high: what has been observed, and the best line for the hours of today still ahead.
     local_idx = pd.DatetimeIndex(raw["t2m"].index).tz_convert(tz)
