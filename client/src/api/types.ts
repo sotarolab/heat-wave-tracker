@@ -78,6 +78,8 @@ export interface StationPage {
   /** How far ahead the same-day correction is drawn, and how many verified steps it needs. */
   same_day_hours: number
   min_steps: number
+  /** Hours over which a corrected line's gap to the latest reading fades; null when no line is tied to one. */
+  anchor_hours: number | null
 }
 
 export interface NetworkRow extends Station {

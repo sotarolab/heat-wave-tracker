@@ -73,10 +73,13 @@ def test_same_day_correction_is_bias_py_applied_for_24_hours():
     assert row["interval"] == round(expect["pi95_halfwidth"], 1) and row["interval"] > 0
 
     line = by_label(page)["Corrected with today's observations"]
-    assert at(page, line, "2026-07-15 20:00") == round(30.0 + expect["bias"], 1)  # the next step
-    assert at(page, line, "2026-07-15 18:00") is None  # not drawn over the past
-    assert at(page, line, "2026-07-16 18:00") == round(25.0 + expect["bias"], 1)  # 23.5 h ahead: inside
+    # The line leaves the 18Z reading (27.5 C against a forecast of 25: a gap of 2.5), and the gap
+    # fades over six hours to today's mean error.
+    assert at(page, line, "2026-07-15 18:00") == 27.5 and at(page, line, "2026-07-15 16:00") is None
+    assert at(page, line, "2026-07-15 20:00") == round(30.0 + 2.5 + (expect["bias"] - 2.5) * 2 / 6, 1)
+    assert at(page, line, "2026-07-16 18:00") == round(25.0 + expect["bias"], 1)  # 23.5 h ahead: inside, gap long faded
     assert at(page, line, "2026-07-16 20:00") is None  # 25.5 h ahead: outside
+    assert page["anchor_hours"] == 6.0
     up, lo = line["band"]["up"], line["band"]["lo"]
     i = page["time"].index(int(pd.Timestamp("2026-07-15 20:00", tz="UTC").timestamp()))
     assert up[i] - lo[i] == pytest.approx(2 * expect["pi95_halfwidth"], abs=0.11)
@@ -86,12 +89,29 @@ def test_same_day_correction_is_bias_py_applied_for_24_hours():
 def test_learned_correction_is_drawn_as_logged_in_its_window():
     page = station.build(forecast(), STN, observations(), learned(), None, "C", NOW)
     line = by_label(page)["Learned correction (xgb-v2)"]
-    assert at(page, line, "2026-07-15 20:00") == 26.5
+    # Logged at 26.5 C, observed 27.5 C at 18Z: the line starts at the reading and the 1 C gap fades in six hours.
+    assert at(page, line, "2026-07-15 18:00") == 27.5 and at(page, line, "2026-07-15 20:00") == round(26.5 + 1.0 * 4 / 6, 1)
+    assert at(page, line, "2026-07-16 00:00") == 26.5  # six hours on: as logged
+    logged = by_label(page)["Learned correction, as logged"]
+    assert at(page, logged, "2026-07-15 16:00") == 26.5 and at(page, logged, "2026-07-15 20:00") is None and "band" not in logged
+    j = page["time"].index(int(pd.Timestamp("2026-07-15 20:00", tz="UTC").timestamp()))
+    assert (line["band"]["lo"][j], line["band"]["up"][j]) == (25.7, 28.7)  # the band moves with the line, same width
     i = page["time"].index(int(pd.Timestamp("2026-07-16 10:00", tz="UTC").timestamp()))
     assert (line["band"]["lo"][i], line["band"]["up"][i]) == (25.0, 28.0)
     assert at(page, line, "2026-07-17 18:00") == 26.5  # 47.5 h ahead: inside
     assert at(page, line, "2026-07-17 20:00") is None  # 49.5 h ahead: outside
     assert page["has_learned"] and "Learned correction (xgb-v2)" not in by_label(page, "hi")
+
+
+def test_without_a_recent_reading_the_lines_are_drawn_as_issued():
+    old = observations().iloc[:-2]  # the last reading is 16Z, two and a half hours before now
+    page = station.build(forecast(), STN, old, learned(), None, "C", NOW)
+    assert page["anchor_hours"] is None and "Learned correction, as logged" not in by_label(page)
+    learned_line = by_label(page)["Learned correction (xgb-v2)"]
+    assert at(page, learned_line, "2026-07-15 16:00") == 26.5 and at(page, learned_line, "2026-07-15 20:00") == 26.5
+    same_day = by_label(page)["Corrected with today's observations"]
+    bias = page["verification"]["today"][0]["bias"]
+    assert at(page, same_day, "2026-07-15 18:00") is None and at(page, same_day, "2026-07-15 20:00") == round(30.0 + bias, 1)
 
 
 def test_todays_high_uses_observations_and_the_best_line_left():
