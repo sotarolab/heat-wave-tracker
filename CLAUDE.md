@@ -42,4 +42,5 @@ the science only.
 - Python 3.11. Tests: `pytest`. The GFS fetch needs eccodes; the tests do not.
 - Secrets (`NEON_DATABASE_URL`, the deploy hook, API keys) are environment variables set
   in GitHub and Render. Never print, log or commit them. Never read `.env`.
-- `app.py` is the Dash page. It is removed at the cutover (#39) and gets no new features.
+- The page is `service/` (FastAPI) and `client/` (React). The container installs
+  `service/requirements.txt`; the forecast jobs install `requirements.txt`.

@@ -11,7 +11,11 @@ const shade = (hex: string, alpha: number) => `rgba(${[1, 3, 5].map((k) => parse
 /** Lines over time on one axis, in the station's own time zone. The legend under the plot is the readout:
  *  it lists every line at the crosshair. A dashed rule marks `now`; drag to zoom, double click to reset.
  *  Rebuilt when its data changes, so callers pass memoised `time` and `lines`. */
-export function Chart({ time, lines, unit, tz, now, height = 320 }: { time: number[]; lines: Line[]; unit: string; tz: string; now: number; height?: number }) {
+export function Chart({ time, lines, unit, tz, now, height = 320, floor, ceil }: {
+  time: number[]; lines: Line[]; unit: string; tz: string; now: number; height?: number
+  /** Hard limits of the y range, for a wind or a humidity that cannot cross them. */
+  floor?: number; ceil?: number
+}) {
   const host = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const el = host.current
@@ -27,8 +31,9 @@ export function Chart({ time, lines, unit, tz, now, height = 320 }: { time: numb
     const bands: uPlot.Band[] = []
     for (const l of lines) {
       series.push({
-        label: l.label, stroke: css(l.color), width: l.width ?? 2, dash: l.dash ? [5, 4] : undefined, spanGaps: true,
-        points: { show: false }, value: (_u, v) => (v == null ? '–' : `${v}${unit}`),
+        label: l.label, stroke: css(l.color), width: l.dots ? 0 : l.width ?? 2, dash: l.dash ? [5, 4] : undefined, spanGaps: !l.dots,
+        points: l.dots ? { show: true, size: 5, fill: css(l.color), stroke: css(l.color) } : { show: false },
+        value: (_u, v) => (v == null ? '–' : `${v}${unit}`),
       })
       data.push(l.values)
     }
@@ -48,9 +53,12 @@ export function Chart({ time, lines, unit, tz, now, height = 320 }: { time: numb
       cursor: { drag: { x: true, y: false } },
       // The key beside a name is a short stroke of the line's colour, as the line itself is drawn.
       legend: { markers: { width: 0, fill: (_u, i) => (i > 0 && i <= lines.length ? css(lines[i - 1].color) : 'transparent') } },
+      scales: floor == null && ceil == null ? {} : {
+        y: { range: (_u, min, max) => [floor ?? Math.floor(min - 1), ceil ?? Math.max(Math.ceil(max * 1.1), (floor ?? 0) + 1)] },
+      },
       axes: [
         { ...axis, values: (_u, ticks) => ticks.map((t) => (hour.format(t * 1e3) === '0' || hour.format(t * 1e3) === '00' ? day.format(t * 1e3) : clock.format(t * 1e3))) },
-        { ...axis, size: 54, values: (_u, ticks) => ticks.map((t) => `${t}°`) },
+        { ...axis, size: 54, values: (_u, ticks) => ticks.map((t) => (unit.startsWith('°') ? `${t}°` : `${+t.toFixed(2)}`)) },
       ],
       series,
       bands,
@@ -77,6 +85,6 @@ export function Chart({ time, lines, unit, tz, now, height = 320 }: { time: numb
     const resize = new ResizeObserver(() => u.setSize({ width: el.clientWidth, height }))
     resize.observe(el)
     return () => { resize.disconnect(); u.destroy() }
-  }, [time, lines, unit, tz, now, height])
+  }, [time, lines, unit, tz, now, height, floor, ceil])
   return <div className="chart" ref={host} />
 }

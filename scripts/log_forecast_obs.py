@@ -46,7 +46,7 @@ ASOS_HOURS = 72
 # metric -> (GFS variable name, observed-value column in fetch_station_obs's output)
 # "hi" observed values aren't in the raw ASOS feed - computed below from
 # observed temp_c + dewpoint_c with the same formula the forecast side uses,
-# same approach app.py's station chart already takes for the live comparison.
+# same approach the station page already takes for the live comparison.
 METRICS = {"t2m": "temp_c", "td2m": "dewpoint_c", "hi": "hi_c"}
 
 

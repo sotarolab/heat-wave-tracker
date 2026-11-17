@@ -34,7 +34,7 @@ import re
 import requests
 
 IEM_AFOS_URL = "https://mesonet.agron.iastate.edu/cgi-bin/afos/retrieve.py"
-USER_AGENT = "heat-wave-tracker/0.1 (portfolio/research use)"
+USER_AGENT = "heat-wave-tracker/0.1 (research use)"
 
 _DATE_RE = re.compile(r"CLIMATE SUMMARY FOR ([A-Z]+ +\d{1,2} +\d{4})")
 _YEAR_RE = re.compile(r"^(?:18|19|20)\d{2}$")

@@ -30,7 +30,11 @@ function Scale({ legend, unit }: { legend: Legend; unit: Unit }) {
 
 /** The forecast over the lower 48: one GFS field at a time, stepped through the next five days, with
  *  every station on it in the same colours, and radar or satellite over it for what is there now. */
-export function MapPane({ unit, onUnit, onStation, tick }: { unit: Unit; onUnit: (u: Unit) => void; onStation: (id: string) => void; tick: number }) {
+export function MapPane({ unit, onUnit, selected, onStation, tick }: {
+  unit: Unit; onUnit: (u: Unit) => void
+  /** The station ringed on the map; its forecast is drawn under this pane by the app. */
+  selected: string | null; onStation: (id: string) => void; tick: number
+}) {
   const meta = useFetch((s) => api.fieldMeta(unit, s), [unit], tick)
   const net = useFetch((s) => api.stations(unit, s), [unit], tick)
   const [varId, setVarId] = useState('t2m')
@@ -39,7 +43,6 @@ export function MapPane({ unit, onUnit, onStation, tick }: { unit: Unit; onUnit:
   const [playing, setPlaying] = useState(false)
   const [weather, setWeather] = useState<Weather>('off')
   const [showDots, setShowDots] = useState(true)
-  const [selected, setSelected] = useState<string | null>(null)
 
   const variable = meta.data?.variables.find((v) => v.id === varId) ?? meta.data?.variables[0]
   const count = variable?.frames.length ?? 0
@@ -90,7 +93,7 @@ export function MapPane({ unit, onUnit, onStation, tick }: { unit: Unit; onUnit:
         {net.error && <span className="stamp">Stations unavailable: {net.error}</span>}
       </div>
       <FieldMap image={api.fieldUrl(variable.id, i, meta.data.cycle)} bounds={meta.data.bounds} opacity={meta.data.opacity}
-        dots={dots} selected={selected} onSelect={setSelected} weather={weather} tick={tick} />
+        dots={dots} selected={selected} onSelect={onStation} weather={weather} tick={tick} />
       <div className="row" style={{ marginTop: 10 }}>
         <button className="acct" disabled={count < 2} onClick={() => setPlaying((p) => !p)}>{playing ? 'Pause' : 'Play'}</button>
         <input className="frames" type="range" min={0} max={count - 1} value={i} aria-label="Forecast time"
@@ -101,13 +104,12 @@ export function MapPane({ unit, onUnit, onStation, tick }: { unit: Unit; onUnit:
       {at && (
         <p className="headline">
           {at.name}: <span className="num">{atValue == null ? 'no value' : `${atValue}°${shown}`}</span>
-          <span className="note"> {variable.label.toLowerCase()}, {variable.frames[i]?.label} </span>
-          <button className="acct" onClick={() => onStation(at.id)}>Open its forecast</button>
+          <span className="note"> {variable.label.toLowerCase()}, {variable.frames[i]?.label}. Its forecast is below.</span>
         </p>
       )}
       <p className="note">
         {variable.label}: {variable.note}. One model, GFS, at a quarter of a degree; each station shows the grid point nearest it.
-        Radar and satellite are what is there now, whatever forecast time the slider is on. Click a station for its value, then open its forecast.
+        Radar and satellite are what is there now, whatever forecast time the slider is on. Click a station to see its forecast under the map.
       </p>
     </section>
   )

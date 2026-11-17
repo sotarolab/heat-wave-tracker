@@ -49,8 +49,12 @@ def learned() -> pd.DataFrame:
     return df
 
 
-def by_label(page: dict, chart: str = "t2m") -> dict:
-    return {line["label"]: line for line in page["charts"][chart]}
+def chart(page: dict, cid: str) -> dict:
+    return next(c for c in page["charts"] if c["id"] == cid)
+
+
+def by_label(page: dict, cid: str = "t2m") -> dict:
+    return {line["label"]: line for line in chart(page, cid)["lines"]}
 
 
 def at(page: dict, line: dict, when: str) -> float | None:
@@ -111,23 +115,58 @@ def test_todays_high_uses_observations_and_the_best_line_left():
 def test_a_page_without_observations_or_with_an_ended_forecast():
     ds = forecast()
     bare = station.build(ds, STN, None, None, None, "F", NOW)
-    assert [line["label"] for line in bare["charts"]["t2m"]] == ["GFS, raw"] and "unavailable" in bare["headline"]
+    assert list(by_label(bare)) == ["GFS, raw"] and "unavailable" in bare["headline"]
+    assert [c["id"] for c in bare["charts"]] == ["t2m", "hi"]  # no observations and no other models: nothing else to draw
     assert bare["verification"] == {"today": [], "model": None} and not bare["stale"]
     late = station.build(ds, STN, observations(), learned(), None, "F", pd.Timestamp("2026-09-01", tz="UTC"))
     assert late["stale"] and "ended Jul 18" in late["headline"]
-    assert [line["label"] for line in late["charts"]["t2m"]] == ["GFS, raw"]  # nothing current is drawn over it
+    assert list(by_label(late)) == ["GFS, raw"]  # nothing current is drawn over it
     assert len(late["time"]) == len(TIMES)
 
 
-def test_other_models_are_drawn_for_the_hours_ahead_only():
+def model_frame(temp_c: float = 24.0) -> pd.DataFrame:
     t = pd.date_range("2026-07-15 12:00", periods=48, freq="1h", tz="UTC")
-    others = {"gfs_hrrr": pd.Series(24.0, index=t), "unknown_model": pd.Series(1.0, index=t)}
+    return pd.DataFrame({"temp_c": temp_c, "dewpoint_c": 12.0, "rh": 40.0, "wind_kmh": 16.0934, "precip_mm": 2.54,
+                         "cloud_pct": 50.0, "pressure_hpa": 1012.34}, index=t)
+
+
+def test_other_models_are_drawn_for_the_hours_ahead_only():
+    others = {"gfs_hrrr": model_frame(), "gfs_global": model_frame(1.0), "unknown_model": model_frame()}
     page = station.build(forecast(), STN, observations(), None, None, "C", NOW, others)
     hrrr = by_label(page)["HRRR, raw"]
     assert at(page, hrrr, "2026-07-15 18:00") is None and at(page, hrrr, "2026-07-15 19:00") == 24.0
-    assert "unknown_model, raw" not in by_label(page) and "HRRR, raw" not in by_label(page, "hi")
+    # Temperature's GFS is the forecast file's, as issued: Open-Meteo's GFS is not a second line there.
+    assert set(by_label(page)) == {"GFS, raw", "HRRR, raw", "Corrected with today's observations", "Observed"}
+    assert "HRRR, raw" not in by_label(page, "hi")
     late = station.build(forecast(), STN, observations(), None, None, "C", pd.Timestamp("2026-09-01", tz="UTC"), others)
-    assert "HRRR, raw" not in by_label(late)
+    assert "HRRR, raw" not in by_label(late) and [c["id"] for c in late["charts"]] == ["t2m", "hi"]
+
+
+def test_the_other_variables_in_display_units():
+    obs = observations().assign(wind_spd_kt=10.0, wind_gust_kt=float("nan"), sky_cover=0.75, pressure_hpa=1015.0, precip_in=0.0)
+    obs.loc[obs.index[-1], ["wind_gust_kt", "precip_in"]] = [20.0, 0.1]   # 18Z: a gust, a tenth of an inch
+    obs.loc[obs.index[-2], "precip_in"] = 0.2
+    others = {"gfs_global": model_frame(), "gfs_hrrr": model_frame()}
+    us = station.build(forecast(), STN, obs, None, None, "F", NOW, others)
+    assert [(c["id"], c["unit"]) for c in us["charts"]] == [
+        ("t2m", "°F"), ("hi", "°F"), ("td", "°F"), ("rh", "%"), ("wind", " mph"), ("cloud", "%"), ("precip", " in"), ("pressure", " hPa")]
+    wind = by_label(us, "wind")
+    assert at(us, wind["HRRR"], "2026-07-15 19:00") == 10 and at(us, wind["Observed"], "2026-07-15 18:00") == 12  # 16.09 km/h, 10 kt
+    assert at(us, wind["Observed gusts"], "2026-07-15 18:00") == 23 and wind["Observed gusts"]["dots"]
+    assert at(us, wind["Observed gusts"], "2026-07-15 17:00") is None and chart(us, "wind")["floor"] == 0
+    # Precipitation: the gauge's running total, and each model's hourly amounts added on from now.
+    rain = by_label(us, "precip")
+    assert at(us, rain["Observed"], "2026-07-15 16:00") == 0.0 and at(us, rain["Observed"], "2026-07-15 18:00") == 0.3
+    assert at(us, rain["HRRR"], "2026-07-15 19:00") == 0.4 and at(us, rain["HRRR"], "2026-07-15 21:00") == 0.6
+    short = {"gfs_hrrr": model_frame().assign(precip_mm=lambda d: d["precip_mm"].where(d.index <= pd.Timestamp("2026-07-15 20:00", tz="UTC")))}
+    ended = by_label(station.build(forecast(), STN, obs, None, None, "F", NOW, short), "precip")["HRRR"]
+    assert at(us, ended, "2026-07-15 20:00") == 0.5 and at(us, ended, "2026-07-15 21:00") is None  # the total stops with the model
+    assert at(us, by_label(us, "cloud")["Observed"], "2026-07-15 18:00") == 75 and chart(us, "cloud")["ceil"] == 100
+    assert at(us, by_label(us, "pressure")["GFS"], "2026-07-15 19:00") == 1012.3 and by_label(us, "pressure")["GFS"]["dash"]
+    assert at(us, by_label(us, "td")["Observed"], "2026-07-15 18:00") == 50.0  # 10 C
+    metric = station.build(forecast(), STN, obs, None, None, "C", NOW, others)
+    assert chart(metric, "wind")["unit"] == " km/h" and at(metric, by_label(metric, "wind")["HRRR"], "2026-07-15 19:00") == 16
+    assert at(metric, by_label(metric, "precip")["Observed"], "2026-07-15 18:00") == 7.6  # 0.3 in
 
 
 def test_model_scores_are_converted_as_differences():

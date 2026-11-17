@@ -66,6 +66,9 @@ th.sortable { cursor: pointer; user-select: none; }
 th.sortable:hover { color: var(--ink); }
 .scroll { max-height: 70vh; overflow: auto; border: 1px solid var(--rule); padding: 0 10px; }
 .vchart { background: var(--panel); border: 1px solid var(--rule); padding: 10px 10px 6px; }
+.vchart h3 { display: flex; justify-content: space-between; align-items: baseline; font: 600 11px/1 var(--sans); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); margin: 0 0 6px; }
+.pgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.pgrid > * { min-width: 0; }
 .chart { width: 100%; }
 .key { display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: middle; }
 /* uPlot: its legend is the readout under the crosshair, in text tokens, with the line's colour on the key only.
@@ -91,7 +94,7 @@ th.sortable:hover { color: var(--ink); }
 .sat img { max-width: 100%; height: auto; display: block; }
 footer { padding: 16px 14px; font: 11px/1.5 var(--sans); color: var(--faint); }
 @media (max-width: 900px) {
-  .sky { grid-template-columns: 1fr; }
+  .sky, .pgrid { grid-template-columns: 1fr; }
   .map { height: 440px; }
 }
 /* Leaflet on the dark ground. */

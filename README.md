@@ -1,90 +1,110 @@
-# US Heat Wave Tracker
+# US nowcast
 
 [![QC](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/qc.yml/badge.svg)](https://github.com/sotarolab/heat-wave-tracker/actions/workflows/qc.yml)
 [![License: CC BY-NC 4.0](https://img.shields.io/badge/License-CC%20BY--NC%204.0-lightgrey.svg)](LICENSE)
 
 **Live: https://heat-wave-tracker.onrender.com**
 
-A live dashboard of the GFS forecast (temperature, Heat Index, NWS risk
-levels) over 165 US cities, animated over the full forecast window, with
-real observations pulled from NOAA's ASOS network on click. It began as
-a tracker for the July 2026 CONUS heat wave and now runs year-round. The
-header shows the forecast cycle on the page and marks it stale when the
-six-hourly refresh has not run.
+Station temperature forecasts for 165 US cities, corrected and checked against
+what happened. Every six hours a job fetches the GFS forecast, pairs it with the
+observations that have arrived since, runs a learned correction, and logs both.
+The page shows the forecast, the corrections and how each has verified.
 
-Built with Python, Dash/Plotly, and NOAA's GFS + ASOS data.
+It began as a tracker for the July 2026 heat wave and now runs year-round.
 
-## Beyond the raw forecast
+## The app
 
-Each station panel goes past a plain forecast line:
+| Tab | What it shows | From |
+|---|---|---|
+| Forecast | One station: what it measured, GFS as issued, HRRR and NBM for the hours ahead, the same-day correction with its interval, the learned correction with its band, today's high, and today's verification. Under it, dew point, humidity, wind, cloud, precipitation and pressure, observed and forecast. | GFS (NOAA), ASOS by way of IEM, HRRR and NBM by way of Open-Meteo, the forecast archive |
+| Map | The GFS field over the lower 48 for the next five days, every station in the same colours, radar or satellite over it. A station clicked on the map shows its forecast underneath. | GFS, IEM radar and GOES composites |
+| Stations | Every station's latest reading beside GFS for now, largest misses first. | ASOS by way of IEM |
+| Satellite | GOES loops by sector and band, and the national radar loop. | NOAA STAR, NWS |
 
-- **Same-day bias correction**: the raw GFS forecast is corrected
-  against that station's own real observations from earlier today,
-  with a genuine 95% prediction interval (not a placeholder band) that
-  widens appropriately when only a handful of same-day observations
-  are available, and is scoped to the near-term forecast rather than
-  extrapolated across the whole multi-day window.
-- **Live verification**: a running scorecard of bias, RMSE, and a
-  Brier score comparing the day's forecast against what actually
-  happened, updating as new observations arrive.
-- **Historical extreme-value analysis**: each station's forecast is
-  checked against a 54-year historical temperature record using a
-  Generalized Extreme Value (GEV) fit, answering "how rare is this,
-  historically, at this specific city."
+## The two corrections
 
-## Where this is going, and how it is built
+- **Same-day correction.** GFS shifted by its mean error at the station so far
+  today, for the next 24 hours, with a 95% prediction interval from today's
+  residuals (`src/heat/bias.py`). It needs no history and works from the third
+  verified forecast step of the day.
+- **Learned correction.** A gradient-boosted model trained on the archive of past
+  forecasts and observations, with a calibrated band (`src/heat/correction.py`,
+  notebooks 02 to 05). It runs in the refresh job before the observations arrive,
+  so every row it is later scored on is out of sample. Results are in
+  [docs/ml/EXPERIMENTS.md](docs/ml/EXPERIMENTS.md) and on the page.
 
-The page is being rebuilt as one FastAPI service and one React page around
-the correction model, with a tracked model lifecycle (training as a script,
-MLflow, data contracts, a golden backtest, drift monitoring, retraining).
+## Architecture, plan and process
 
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the system, the model
-  lifecycle and the layering, as diagrams, with what is built and what is
-  planned.
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md): the system, the model lifecycle
+  and the layering, as diagrams, with what is built and what is planned.
 - [docs/PLAN.md](docs/PLAN.md): the order of work, one issue per step.
-- [docs/process/WORKFLOW.md](docs/process/WORKFLOW.md): the code is written
-  with AI agents under gates. This page lists the gates, the skills and
-  subagents kept in `.claude/`, and which parts a person reads line by line.
+- [docs/process/WORKFLOW.md](docs/process/WORKFLOW.md): the code is written with
+  AI agents under gates. This page lists the gates, the skills and subagents kept
+  in `.claude/`, and which parts a person reads line by line.
 - [docs/decisions/](docs/decisions/): one page per decision, dated.
 
-## Run the new page locally
-
-The service and the client that replace the Dash page are in `service/` and
-`client/`. They read the same forecast file.
-
-```bash
-pip install -r requirements.txt
-uvicorn service.app:app --port 8051      # the API and field images
-cd client && npm ci && npm run dev       # the page, proxying /api to 8051
-```
-
-`npm run build` writes `client/dist`, which the service then serves at `/`.
-
-The learned correction and its scored record are read from the forecast
-archive. Set `NEON_DATABASE_URL` to see them locally; without it the page
-shows the observations, the models and the same-day correction.
+One rule holds the design together: jobs write, routes read. The scheduled job
+computes and commits; the service reads what it wrote and draws nothing it had to
+fit at request time, with one stated exception (the same-day correction).
 
 ## Run it locally
 
 ```bash
 git clone https://github.com/sotarolab/heat-wave-tracker.git
 cd heat-wave-tracker
-pip install -r requirements.txt
-python scripts/fetch_gfs_conus.py   # pulls current GFS forecast (~3-5 min)
-python app.py                       # http://localhost:8051
+pip install -r service/requirements.txt
+cd client && npm ci && npm run build && cd ..
+uvicorn service.app:app --port 8051      # http://localhost:8051
 ```
 
-The historical extreme-value archive (`data/climate_extremes.parquet`)
-is pre-built and included; see `scripts/fetch_historical_temps.py` if
-you want to regenerate it.
+The forecast file in `data/` is the one the last refresh committed. For a newer
+one, `pip install -r requirements.txt` and `python scripts/fetch_gfs_conus.py --overwrite`
+(three to five minutes; needs eccodes).
+
+While working on the client, `npm run dev` in `client/` serves it with `/api`
+proxied to port 8051.
+
+The learned correction and its scored record are read from the forecast archive.
+Set `NEON_DATABASE_URL` to see them locally; without it the page shows the
+observations, the models and the same-day correction.
+
+## Checks
+
+```bash
+pip install -r requirements-dev.txt
+ruff check . && mypy && pytest -q && python scripts/check_phrases.py
+cd client && npm run build && npx vitest run
+docker build -t us-nowcast . && docker run -p 8051:8051 us-nowcast
+```
+
+The same run in CI on every pull request, including the container build and a
+call to each route.
+
+## Deployment
+
+One Docker container on Render (`Dockerfile`): the client is built in one stage,
+the service runs in the next. The refresh job (`.github/workflows/refresh-gfs-data.yml`)
+commits the new forecast file to `master` and calls Render's deploy hook, so each
+cycle is a fresh container.
+
+## Known simplifications
+
+Left behind with the Dash page for now, with the code still in `src/heat/`:
+
+- the return period of a forecast high against the station's 54-year record
+  (`src/heat/extremes.py`);
+- yesterday's high against the 1991 to 2020 normal (`src/heat/climate.py`);
+- overnight lows and the heat streak count.
 
 ## Data sources
 
-- **Forecast**: NOAA GFS, fetched via [Herbie](https://github.com/blaylockbk/Herbie)
-- **Observations**: [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/) ASOS network, current and historical
-- **Climate normals**: NWS Daily Climate Report (1991-2020 normals)
-- **Risk categories**: official NWS heat-index thresholds
-- **Basemap**: Esri World Light Gray Canvas (Esri, HERE, Garmin, © OpenStreetMap contributors)
+- **Forecast**: NOAA GFS, fetched with [Herbie](https://github.com/blaylockbk/Herbie); HRRR and NBM from [Open-Meteo](https://open-meteo.com/)
+- **Observations**: the ASOS network, from the [Iowa Environmental Mesonet](https://mesonet.agron.iastate.edu/)
+- **Radar and satellite**: NWS, NOAA STAR, Iowa Environmental Mesonet
+- **Risk categories**: NWS heat index thresholds
+- **Basemap**: Esri World Dark Gray Canvas (Esri, HERE, Garmin, OpenStreetMap contributors)
+
+Not a warning product. For heat or any other hazard, check [weather.gov](https://www.weather.gov/).
 
 ## License
 

@@ -30,11 +30,11 @@ const store = (key: string, value: string) => {
   try { localStorage.setItem(key, value) } catch { /* see stored */ }
 }
 
-/** The hash carries the pane and the station, so #forecast?s=KLAX opens exactly that and a link to it works. */
-function readHash(): { tab: Tab; station: string } {
+/** The hash carries the pane and the station, so #forecast?s=KLAX and #map?s=KLAX open exactly that and a link to it works. */
+function readHash(): { tab: Tab; station: string; picked: boolean } {
   const [raw, query] = location.hash.slice(1).split('?')
   const s = new URLSearchParams(query ?? '').get('s')
-  return { tab: TABS.find((t) => t.id === raw)?.id ?? 'forecast', station: (s ?? stored(STATION_KEY) ?? 'KDCA').toUpperCase() }
+  return { tab: TABS.find((t) => t.id === raw)?.id ?? 'forecast', station: (s ?? stored(STATION_KEY) ?? 'KDCA').toUpperCase(), picked: s != null }
 }
 const readUnit = (): Unit => (stored(UNIT_KEY) === 'C' ? 'C' : 'F')
 
@@ -49,10 +49,14 @@ export default function App() {
     const id = setInterval(() => { if (!document.hidden) refresh() }, REFRESH_MS)
     return () => clearInterval(id)
   }, [refresh])
+  // A station clicked on the map stays on the map, with its forecast drawn underneath.
+  const [onMap, setOnMap] = useState<string | null>(start.tab === 'map' && start.picked ? start.station : null)
+  const pickOnMap = useCallback((id: string) => { setOnMap(id); setStation(id) }, [])
   useEffect(() => {
-    history.replaceState(null, '', `#${tab}${tab === 'forecast' ? `?s=${station}` : ''}`)
+    const pick = tab === 'forecast' ? station : tab === 'map' ? onMap : null
+    history.replaceState(null, '', `#${tab}${pick ? `?s=${pick}` : ''}`)
     store(STATION_KEY, station)
-  }, [tab, station])
+  }, [tab, station, onMap])
   const openStation = useCallback((id: string) => { setStation(id); setTab('forecast') }, [])
   const onUnit = useCallback((u: Unit) => {
     setUnit(u)
@@ -97,7 +101,8 @@ export default function App() {
         </div>
       )}
       {tab === 'forecast' && <ForecastPane station={station} unit={unit} tick={tick} />}
-      {tab === 'map' && <MapPane unit={unit} onUnit={onUnit} onStation={openStation} tick={tick} />}
+      {tab === 'map' && <MapPane unit={unit} onUnit={onUnit} selected={onMap} onStation={pickOnMap} tick={tick} />}
+      {tab === 'map' && onMap && <ForecastPane station={onMap} unit={unit} tick={tick} />}
       {tab === 'stations' && <StationsPane unit={unit} onSelect={openStation} tick={tick} />}
       {tab === 'sat' && <SatellitePane />}
       <footer>

@@ -18,7 +18,7 @@ RULES = {
     "em dash": re.compile(chr(0x2014)),
     "candour word": re.compile("hon" + "est", re.IGNORECASE),
 }
-LEGACY = ("notebooks/", "docs/da/", "src/heat/da/", "scripts/fetch_da_", "tests/test_da_", "app.py")
+LEGACY = ("notebooks/", "docs/da/", "src/heat/da/", "scripts/fetch_da_", "tests/test_da_")
 TEXT = {".py", ".md", ".yml", ".yaml", ".toml", ".json", ".ts", ".tsx", ".css", ".html", ".sh", ".txt"}
 
 
