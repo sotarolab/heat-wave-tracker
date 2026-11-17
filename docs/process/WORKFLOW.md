@@ -48,6 +48,13 @@ be checked rather than trusted.
 | Rules | `CLAUDE.md` | read by the agent at the start of every session |
 | Commit hooks | `.pre-commit-config.yaml` | ruff and the writing-rules check |
 | CI | `.github/workflows/qc.yml` | the gates above on every pull request |
+| Claude on GitHub | `.github/workflows/claude.yml` | a comment with `@claude` on an issue starts the agent in CI; it pushes its work to a `claude/...` branch |
+| Pull request opener | `.github/workflows/open-pr.yml` | opens the pull request for a `claude/...` branch, so the reviewer is not its author |
+
+A change can arrive two ways. From a local session, the agent works under the owner's
+login and the owner merges. From an issue, `@claude` starts the agent on GitHub: the app
+writes the change, a workflow opens the pull request, the gates run on the branch, and
+the owner reviews and approves it as a second party.
 
 ## 4. Numbers
 
