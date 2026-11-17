@@ -23,7 +23,7 @@ jobs:
       pull-requests: write
       issues: write
       id-token: write
-      actions: read # Required for Claude to read CI results on PRs
+      actions: write # read: Claude reads CI results on PRs; write: the last step starts QC
     steps:
       - name: Checkout repository
         uses: actions/checkout@v6
@@ -35,8 +35,6 @@ jobs:
         uses: anthropics/claude-code-action@v1
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          claude_args: |
-            --allowedTools "Bash(gh pr create:*)"
 
           # Optional: Customize the trigger phrase (default: @claude)
           # trigger_phrase: "/claude"
@@ -58,3 +56,50 @@ jobs:
           #       "NODE_ENV": "test"
           #     }
           #   }
+
+      # Claude pushes its work to a branch and leaves a link for a person to open the pull
+      # request. A pull request opened from that link belongs to whoever clicked it, and nobody
+      # can approve their own. This step opens it instead, so its reviewer is not its author.
+      #
+      # It runs here, after Claude, because a branch pushed by the app starts no workflow
+      # (tried with a separate workflow on `push`: it never ran). For the same reason the pull
+      # request starts no checks, so QC is started on the branch by hand.
+      #
+      # Needs the repository setting "Allow GitHub Actions to create and approve pull requests".
+      - name: Open the pull request for Claude's branch
+        if: steps.claude.outputs.branch_name != ''
+        env:
+          BRANCH: ${{ steps.claude.outputs.branch_name }}
+          REPO: ${{ github.repository }}
+          APP_TOKEN: ${{ steps.claude.outputs.github_token }}
+          ACTIONS_TOKEN: ${{ github.token }}
+        run: |
+          export GH_TOKEN="$ACTIONS_TOKEN"
+          if [ -n "$(gh pr list --repo "$REPO" --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            echo "A pull request for $BRANCH is already open; the push updated it."
+          elif [ "${BRANCH#claude/}" = "$BRANCH" ]; then
+            echo "$BRANCH is not one of Claude's own branches; no pull request is opened for it."
+          elif [ "$(gh api "repos/$REPO/compare/master...$BRANCH" --jq .ahead_by)" = "0" ]; then
+            echo "$BRANCH has nothing that master lacks."
+            exit 0
+          else
+            # The app names its branches claude/issue-<number>-<time>.
+            issue=$(printf '%s' "$BRANCH" | sed -nE 's#^claude/issue-([0-9]+)-.*#\1#p')
+            gh api "repos/$REPO/commits/$BRANCH" --jq .commit.message > message.txt
+            {
+              if [ -n "$issue" ]; then printf 'Closes #%s\n\n' "$issue"; fi
+              printf '## What changed\n\n'
+              cat message.txt
+              printf '\n\n## How this was built\n\n'
+              printf 'Written by the Claude GitHub App'
+              if [ -n "$issue" ]; then printf ' from issue #%s' "$issue"; fi
+              printf '. This pull request was opened by a workflow so that a person reviews it. '
+              printf 'Nobody has read the change yet. QC was started on the branch.\n'
+            } > body.md
+            title=$(head -n 1 message.txt)
+            # As the Claude app when its token still works, so the author is the one who wrote
+            # the change; otherwise as the Actions bot. Either way the author is not the reviewer.
+            GH_TOKEN="$APP_TOKEN" gh pr create --repo "$REPO" --base master --head "$BRANCH" --title "$title" --body-file body.md \
+              || gh pr create --repo "$REPO" --base master --head "$BRANCH" --title "$title" --body-file body.md
+          fi
+          gh workflow run qc.yml --repo "$REPO" --ref "$BRANCH"

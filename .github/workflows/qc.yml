@@ -4,10 +4,11 @@ name: QC
 # runs the same commands before a pull request is opened.
 on:
   push:
-    # `claude/**`: a pull request opened by the Actions bot (open-pr.yml) starts no workflow of
-    # its own, so the gates run on the branch push and show on the pull request's head commit.
-    branches: [master, 'claude/**']
+    branches: [master]
   pull_request:
+  # Started by claude.yml on the branch Claude pushed: neither that push nor the pull request
+  # opened for it starts a workflow, so the gates are run by hand and show on its head commit.
+  workflow_dispatch:
 
 jobs:
   python:
