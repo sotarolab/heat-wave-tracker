@@ -4,6 +4,8 @@
 :root {
   --bg: #0f1114; --panel: #15181c; --panel2: #1b1f24; --ink: #e8e6e1; --dim: #9a9890; --faint: #5e5c56;
   --rule: #262a30; --hot: #ff7a1a; --now: #ff7a1a; --obs: #f4f1ea; --warn: #f2c14e;
+  /* One meaning each, on every chart: what was measured, the raw model, the learned correction. */
+  --raw: #7e8794; --ml: #c084fc;
   --series-1: #3987e5; --series-2: #d95926; --series-3: #199e70; --series-4: #c98500; --series-5: #d55181;
   --map-h: clamp(460px, 70vh, 720px);
   --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
@@ -45,6 +47,35 @@ header.top .sub { font-size: 12px; color: var(--dim); }
 .seg button { background: transparent; border: 0; border-right: 1px solid var(--rule); color: var(--dim); font: 600 12px var(--sans); padding: 6px 10px; cursor: pointer; white-space: nowrap; }
 .seg button:last-child { border-right: 0; }
 .seg button.on { background: var(--panel2); color: var(--ink); }
+.context { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 14px; border-bottom: 1px solid var(--rule); background: var(--panel); }
+.picker { display: inline-flex; align-items: center; gap: 8px; }
+.picker select { background: var(--panel2); color: var(--ink); border: 1px solid var(--rule); font: 13px var(--sans); padding: 6px 8px; max-width: 70vw; }
+.tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin: 0 0 12px; }
+.tile { display: flex; flex-direction: column; gap: 4px; background: var(--panel); border: 1px solid var(--rule); padding: 10px 12px; min-width: 0; }
+.tile b { font-size: 20px; }
+.tile .note { margin: 0; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+table.grid { width: 100%; border-collapse: collapse; font-size: 13px; }
+table.grid th { font: 600 11px/1 var(--sans); letter-spacing: .08em; text-transform: uppercase; color: var(--dim); text-align: left; padding: 7px 10px 7px 0; border-bottom: 1px solid var(--faint); white-space: nowrap; position: sticky; top: 0; background: var(--bg); }
+table.grid td { padding: 7px 10px 7px 0; border-bottom: 1px solid var(--rule); vertical-align: baseline; white-space: nowrap; }
+table.grid .r { text-align: right; }
+table.grid tr.dead td { color: var(--faint); }
+table.grid tr.pick { cursor: pointer; }
+table.grid tr.pick:hover td { background: var(--panel2); }
+table.grid tr.best td { color: var(--ink); background: rgba(192, 132, 252, .08); }
+th.sortable { cursor: pointer; user-select: none; }
+th.sortable:hover { color: var(--ink); }
+.scroll { max-height: 70vh; overflow: auto; border: 1px solid var(--rule); padding: 0 10px; }
+.vchart { background: var(--panel); border: 1px solid var(--rule); padding: 10px 10px 6px; }
+.chart { width: 100%; }
+.key { display: inline-block; width: 14px; height: 3px; margin-right: 6px; vertical-align: middle; }
+/* uPlot: its legend is the readout under the crosshair, in text tokens, with the line's colour on the key only.
+   Scoped under .chart to win over uPlot's own sheet, which loads after this one. */
+.chart .u-legend { font: 11px var(--mono); color: var(--dim); text-align: left; margin: 2px 0 0; }
+.chart .u-legend th { font-weight: 400; }
+.chart .u-legend .u-value { color: var(--ink); }
+.chart .u-legend .u-marker { border-radius: 0; height: 3px; width: 14px; }
+.u-select { background: rgba(244, 241, 234, .07); }
+.u-cursor-x, .u-cursor-y { border-color: var(--faint); }
 .toggle { display: inline-flex; align-items: center; gap: 6px; cursor: pointer; }
 .toggle input { accent-color: var(--hot); margin: 0; }
 .frames { flex: 1 1 200px; max-width: 480px; accent-color: var(--hot); }

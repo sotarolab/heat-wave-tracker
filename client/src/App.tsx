@@ -1,12 +1,16 @@
 import { useCallback, useEffect, useState } from 'react'
 import { api } from './api/client'
 import type { Unit } from './api/types'
+import { ForecastPane } from './components/ForecastPane'
 import { MapPane } from './components/MapPane'
 import { SatellitePane } from './components/SatellitePane'
+import { StationsPane } from './components/StationsPane'
 import { useFetch } from './hooks/useFetch'
 
 const TABS = [
+  { id: 'forecast', label: 'Forecast' },
   { id: 'map', label: 'Map' },
+  { id: 'stations', label: 'Stations' },
   { id: 'sat', label: 'Satellite' },
 ] as const
 type Tab = (typeof TABS)[number]['id']
@@ -14,18 +18,30 @@ type Tab = (typeof TABS)[number]['id']
 const REFRESH_MS = 5 * 60_000
 const UNIT_KEY = 'us.unit'
 
-/** The hash carries the pane, so a link to #sat opens the satellite loops. */
-const readTab = (): Tab => TABS.find((t) => t.id === location.hash.slice(1).split('?')[0])?.id ?? 'map'
-const readUnit = (): Unit => {
+const STATION_KEY = 'us.station'
+const stored = (key: string): string | null => {
   try {
-    return localStorage.getItem(UNIT_KEY) === 'C' ? 'C' : 'F'
+    return localStorage.getItem(key)
   } catch {
-    return 'F' // storage can be blocked; the page works without it
+    return null // storage can be blocked; the page works without it
   }
 }
+const store = (key: string, value: string) => {
+  try { localStorage.setItem(key, value) } catch { /* see stored */ }
+}
+
+/** The hash carries the pane and the station, so #forecast?s=KLAX opens exactly that and a link to it works. */
+function readHash(): { tab: Tab; station: string } {
+  const [raw, query] = location.hash.slice(1).split('?')
+  const s = new URLSearchParams(query ?? '').get('s')
+  return { tab: TABS.find((t) => t.id === raw)?.id ?? 'forecast', station: (s ?? stored(STATION_KEY) ?? 'KDCA').toUpperCase() }
+}
+const readUnit = (): Unit => (stored(UNIT_KEY) === 'C' ? 'C' : 'F')
 
 export default function App() {
-  const [tab, setTab] = useState<Tab>(readTab)
+  const [start] = useState(readHash)
+  const [tab, setTab] = useState<Tab>(start.tab)
+  const [station, setStation] = useState(start.station)
   const [unit, setUnit] = useState<Unit>(readUnit)
   const [tick, setTick] = useState(0)
   const refresh = useCallback(() => setTick((n) => n + 1), [])
@@ -33,12 +49,18 @@ export default function App() {
     const id = setInterval(() => { if (!document.hidden) refresh() }, REFRESH_MS)
     return () => clearInterval(id)
   }, [refresh])
-  useEffect(() => { history.replaceState(null, '', `#${tab}`) }, [tab])
+  useEffect(() => {
+    history.replaceState(null, '', `#${tab}${tab === 'forecast' ? `?s=${station}` : ''}`)
+    store(STATION_KEY, station)
+  }, [tab, station])
+  const openStation = useCallback((id: string) => { setStation(id); setTab('forecast') }, [])
   const onUnit = useCallback((u: Unit) => {
     setUnit(u)
-    try { localStorage.setItem(UNIT_KEY, u) } catch { /* see readUnit */ }
+    store(UNIT_KEY, u)
   }, [])
   const manifest = useFetch((s) => api.manifest(s), [], tick)
+  const net = useFetch((s) => api.stations(unit, s), [unit])
+  const list = [...(net.data?.stations ?? [])].sort((a, b) => a.name.localeCompare(b.name))
   const m = manifest.data
 
   return (
@@ -50,7 +72,7 @@ export default function App() {
         </div>
         <div className="row">
           {m
-            ? <span className={`stamp live${m.live ? '' : ' stale'}`} title="The forecast cycle on this page. It refreshes every six hours.">GFS {m.init.slice(0, 13)}Z · {m.badge}</span>
+            ? <span className={`stamp live${m.live ? '' : ' stale'}`} title="The forecast cycle on this page. It refreshes every six hours.">{m.label} · {m.badge}</span>
             : <span className="stamp">{manifest.error ?? 'Reading the forecast cycle…'}</span>}
           <button className="acct" onClick={refresh} title="Refetch every panel now; they also refresh every five minutes while the tab is visible">Refresh</button>
         </div>
@@ -60,10 +82,26 @@ export default function App() {
           <button key={t.id} className={`tab${tab === t.id ? ' active' : ''}`} onClick={() => setTab(t.id)}>{t.label}</button>
         ))}
       </nav>
-      {tab === 'map' && <MapPane unit={unit} onUnit={onUnit} tick={tick} />}
+      {tab === 'forecast' && (
+        <div className="context">
+          <label className="picker">
+            <span className="eyebrow">Station</span>
+            <select value={station} onChange={(e) => setStation(e.target.value)}>
+              {list.length === 0 && <option>{station}</option>}
+              {list.map((s) => <option key={s.id} value={s.id}>{s.name} ({s.id})</option>)}
+            </select>
+          </label>
+          <div className="seg">
+            {(['F', 'C'] as const).map((u) => <button key={u} className={u === unit ? 'on' : undefined} onClick={() => onUnit(u)}>°{u}</button>)}
+          </div>
+        </div>
+      )}
+      {tab === 'forecast' && <ForecastPane station={station} unit={unit} tick={tick} />}
+      {tab === 'map' && <MapPane unit={unit} onUnit={onUnit} onStation={openStation} tick={tick} />}
+      {tab === 'stations' && <StationsPane unit={unit} onSelect={openStation} tick={tick} />}
       {tab === 'sat' && <SatellitePane />}
       <footer>
-        Forecast: NOAA GFS. Stations: the ASOS network, by way of the Iowa Environmental Mesonet. Radar and satellite: NWS, NOAA
+        Forecast: NOAA GFS; HRRR and NBM by way of Open-Meteo. Stations: the ASOS network, by way of the Iowa Environmental Mesonet. Radar and satellite: NWS, NOAA
         STAR and the Iowa Environmental Mesonet. Not a warning product: for heat or any other hazard, check weather.gov.
       </footer>
     </div>

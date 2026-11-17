@@ -117,8 +117,11 @@ def test_start_frame_is_the_step_nearest_now():
 def test_manifest_reports_age_and_staleness():
     ds = forecast()
     m = payloads.manifest(ds, pd.Timestamp("2026-07-15 18:00", tz="UTC"), "abc123")
-    assert m == {"init": "2026-07-15 12:00:00", "age_h": 6.0, "badge": "LIVE", "live": True, "steps": 13, "stations": len(MAJOR_CONUS_STATIONS), "commit": "abc123"}
+    assert m == {"init": "2026-07-15 12:00:00", "label": "GFS 12Z Jul 15", "age_h": 6.0, "badge": "LIVE", "live": True, "steps": 13, "stations": len(MAJOR_CONUS_STATIONS), "commit": "abc123"}
     assert payloads.manifest(ds, pd.Timestamp("2026-07-18 12:00", tz="UTC"), None)["badge"] == "STALE 3 d"
+    ds.attrs["gfs_init"] = ""
+    none = payloads.manifest(ds, pd.Timestamp("2026-07-18 12:00", tz="UTC"), None)
+    assert (none["label"], none["badge"], none["live"]) == ("No forecast", "NO DATA", False)
 
 
 def test_missing_forecast_is_503_not_a_crash():
@@ -133,3 +136,28 @@ def test_missing_forecast_is_503_not_a_crash():
         assert TestClient(app).get("/api/manifest").status_code == 503
     finally:
         app.dependency_overrides.clear()
+
+
+def test_cache_serves_the_last_good_value_and_does_not_hammer_a_failing_feed(monkeypatch):
+    live.clear()
+    clock = [1000.0]
+    monkeypatch.setattr(live.time, "time", lambda: clock[0])
+    calls = []
+
+    def flaky():
+        calls.append(clock[0])
+        if len(calls) != 2:
+            raise RuntimeError("429")
+        return "good"
+
+    with pytest.raises(RuntimeError):
+        live.cached("k", 900, flaky)
+    with pytest.raises(live.Unavailable):  # ten seconds later: not asked again
+        clock[0] += 10
+        live.cached("k", 900, flaky)
+    assert len(calls) == 1
+    clock[0] += 60
+    assert live.cached("k", 900, flaky) == "good"
+    clock[0] += 901  # stale, and the refetch fails: the last good value is served
+    assert live.cached("k", 900, flaky) == "good" and len(calls) == 3
+    live.clear()

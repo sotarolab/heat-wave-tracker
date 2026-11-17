@@ -3,6 +3,8 @@ export type Unit = 'F' | 'C'
 
 export interface Manifest {
   init: string
+  /** The cycle as the header shows it, e.g. "GFS 18Z Nov 16". */
+  label: string
   age_h: number | null
   badge: string
   live: boolean
@@ -32,4 +34,64 @@ export interface Stations {
   stations: Station[]
   /** values[variable id][station index][frame index], in `unit`; null where the grid has no value. */
   values: Record<string, (number | null)[][]>
+}
+
+export interface ChartLine {
+  label: string
+  /** A CSS custom property name the page resolves, e.g. '--obs'. */
+  color: string
+  values: (number | null)[]
+  dash?: boolean
+  width?: number
+  band?: { lo: (number | null)[]; up: (number | null)[] }
+}
+export interface Tile { label: string; value: string; note: string }
+export interface TodayRow { metric: string; n: number; bias: number; rmse: number; interval: number | null }
+export interface ModelRecord {
+  version: string
+  days: number
+  n: number
+  rmse_raw: number
+  rmse_offset: number
+  rmse_ml: number
+  band_coverage_pct: number | null
+}
+/** service/station.py: one station's page, every number final and in `unit`. */
+export interface StationPage {
+  station: Station & { tz: string }
+  unit: Unit
+  /** The forecast on the page has ended: nothing current is drawn over it. */
+  stale: boolean
+  headline: string
+  tiles: Tile[]
+  /** Epoch seconds: the one time axis every line's values follow. */
+  time: number[]
+  now: number
+  charts: { t2m: ChartLine[]; hi: ChartLine[] }
+  verification: { today: TodayRow[]; model: ModelRecord | null }
+  has_learned: boolean
+  /** How far ahead the same-day correction is drawn, and how many verified steps it needs. */
+  same_day_hours: number
+  min_steps: number
+}
+
+export interface NetworkRow extends Station {
+  observed: number | null
+  observed_min_ago: number | null
+  forecast: number | null
+  /** Observed minus forecast, a difference in `unit`. */
+  error: number | null
+  high_today: number | null
+  high_tomorrow: number | null
+}
+export interface Network {
+  unit: Unit
+  /** False when the forecast on the page has ended. */
+  current: boolean
+  /** Hours back an observation may be and still count as now. */
+  window_h: number
+  reporting: number
+  stations: number
+  mean_abs_error: number | null
+  rows: NetworkRow[]
 }

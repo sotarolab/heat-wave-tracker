@@ -14,7 +14,7 @@ The target is drawn in [ARCHITECTURE.md](ARCHITECTURE.md). The way a change move
 | 0 | #33 | The scheduled refresh back on; the header says how old the forecast is. |
 | 1 | #34 | This plan, the architecture document, templates, skills, subagents, gates. |
 | 2 | #35 | `service/` and `client/`: the shell, the Map tab, the Satellite tab. |
-| 3 | #36 | The Forecast and Stations tabs. |
+| 3 | #36 | The Forecast and Stations tabs: observations, GFS, HRRR and NBM, the two corrections, today's verification. |
 | 4 | #37 | Training as a script, MLflow tracking and registry, data contracts, the golden backtest, the model card. |
 | 5 | #38 | The Lab tab: scorecard by lead, coverage, SHAP, feature importance. |
 | 6 | #39 | Cutover: the service replaces Dash on the live URL; dependencies locked with uv. |
@@ -22,6 +22,7 @@ The target is drawn in [ARCHITECTURE.md](ARCHITECTURE.md). The way a change move
 | 8 | #41 | 500 hPa height and 850 hPa temperature overlays; deep stations with several models. |
 | 9 | #42 | Analysis by optimal interpolation, scored at withheld stations. |
 | 10 | #43 | The assistant restricted to tool results, its evaluation suite, an MCP server. |
+| 11 | #48 | The correction trained on HRRR, scored beside the GFS-based one. |
 
 ## Decisions already taken
 
@@ -32,6 +33,10 @@ The target is drawn in [ARCHITECTURE.md](ARCHITECTURE.md). The way a change move
 | Optimal interpolation replaces the ensemble analysis designed in `da/DESIGN.md`. | ADR with #42 |
 | MLflow for tracking and the registry; artifacts stay in the database for now. | ADR with #37 |
 | All 165 stations stay on the map; about 12 get the multi-model view. | #41 |
+
+## Later
+
+- Rain gauges on the map and in the Stations table (#49).
 
 ## Not planned
 
