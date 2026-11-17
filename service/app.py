@@ -10,6 +10,10 @@ it is opened once, on first use.
 from __future__ import annotations
 
 import os
+import threading
+from collections.abc import AsyncIterator
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import asynccontextmanager
 from functools import lru_cache
 from pathlib import Path
 from typing import Annotated, Any
@@ -25,7 +29,32 @@ from service import fields, live, payloads, sources, station
 from src.heat.gfs_conus import DEFAULT_OUT, load_or_fetch
 from src.heat.stations import get_station
 
-app = FastAPI(title="US nowcast", version="0.1")
+# A station page reads four things from outside (observations, other models, the logged
+# correction, its record). Side by side they cost the slowest one, not the sum.
+_READS = ThreadPoolExecutor(max_workers=8, thread_name_prefix="read")
+
+
+def _warm() -> None:
+    """Load what every first visitor would otherwise wait for: the forecast file, the station
+    table, and the two database reads. Best effort: a failure here is found again on request."""
+    try:
+        ds = _open()
+        if ds is not None:
+            live.cached(f"stations:{payloads.cycle(ds)}:F", live.FOREVER, lambda: payloads.stations(ds, "F"))
+            sources.ml_lines(str(ds.attrs.get("gfs_init", "")))
+            sources.ml_verification()
+    except Exception as exc:
+        print(f"[service] warm-up skipped ({type(exc).__name__})")
+
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI) -> AsyncIterator[None]:
+    # In the background, so the container answers its health check at once.
+    threading.Thread(target=_warm, name="warm", daemon=True).start()
+    yield
+
+
+app = FastAPI(title="US nowcast", version="0.1", lifespan=_lifespan)
 # The stations table is 20,000 numbers; it compresses to a fifth.
 app.add_middleware(GZipMiddleware, minimum_size=2000)
 
@@ -82,11 +111,11 @@ def station_page(station_id: str, ds: Forecast, unit: payloads.Unit = "F") -> di
     stn = get_station(station_id.upper())
     if stn is None:
         raise HTTPException(404, f"No such station: {station_id}")
-    lines = sources.ml_lines(str(ds.attrs.get("gfs_init", ""))) or {}
-    return station.build(
-        ds, stn, sources.observations(stn["id"]), lines.get(stn["id"]), sources.ml_verification(), unit, _now(),
-        sources.models(stn["id"], stn["lat"], stn["lon"]),
-    )
+    obs = _READS.submit(sources.observations, stn["id"])
+    others = _READS.submit(sources.models, stn["id"], stn["lat"], stn["lon"])
+    lines = _READS.submit(sources.ml_lines, str(ds.attrs.get("gfs_init", "")))
+    record = _READS.submit(sources.ml_verification)
+    return station.build(ds, stn, obs.result(), (lines.result() or {}).get(stn["id"]), record.result(), unit, _now(), others.result())
 
 
 @app.get("/api/field/meta")

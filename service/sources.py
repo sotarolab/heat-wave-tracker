@@ -145,6 +145,9 @@ def _query(sql: str, params: tuple[Any, ...]) -> list[tuple[Any, ...]] | None:
         return None
 
 
+_lines: dict[str, dict[str, pd.DataFrame]] = {}
+
+
 def ml_lines(gfs_init: str) -> dict[str, pd.DataFrame] | None:
     """The logged correction for this forecast cycle, per station: ml_c, lo_c, up_c, raw_c by valid time.
 
@@ -174,7 +177,15 @@ def ml_lines(gfs_init: str) -> dict[str, pd.DataFrame] | None:
                 return out
         return None
 
-    return live.cached(f"ml:{gfs_init}", DB_TTL_S, fetch)  # type: ignore[no-any-return]
+    # A cycle's rows do not change once logged, so a reply with rows is held for the life of the
+    # process. An empty reply is asked for again after DB_TTL_S: the job may not have run yet.
+    if gfs_init in _lines:
+        return _lines[gfs_init]
+    got: dict[str, pd.DataFrame] | None = live.cached(f"ml:{gfs_init}", DB_TTL_S, fetch)
+    if got is not None:
+        _lines.clear()  # one cycle at a time
+        _lines[gfs_init] = got
+    return got
 
 
 def ml_verification(days: int = 14) -> dict[str, Any] | None:

@@ -247,3 +247,27 @@ def test_iem_requests_are_spaced(monkeypatch):
     clock[0] += 10
     sources._iem(lambda: "c")
     assert slept == [sources.IEM_GAP_S]
+
+
+def test_a_cycles_logged_correction_is_held_once_it_exists(monkeypatch):
+    live.clear()
+    monkeypatch.setattr(sources, "_lines", {})
+    clock = [1000.0]
+    monkeypatch.setattr(live.time, "time", lambda: clock[0])
+    replies = [None, None, [("KDCA", pd.Timestamp("2026-07-15 08:00", tz="UTC"), 26.5, 25.0, 28.0, 25.0)]]
+    asked = []
+
+    def query(sql, params):
+        asked.append(params[1])
+        return replies.pop(0) if replies else pytest.fail("asked again after the rows were held")
+
+    monkeypatch.setattr(sources, "_query", query)
+    init = "2026-07-15 06:00:00"
+    assert sources.ml_lines(init) is None and asked == ["xgb-v2", "xgb-v1"]  # nothing logged yet, for either version
+    assert sources.ml_lines(init) is None and len(asked) == 2  # not asked again inside ten minutes
+    clock[0] += sources.DB_TTL_S + 1
+    got = sources.ml_lines(init)
+    assert list(got) == ["KDCA"] and got["KDCA"].attrs["version"] == "xgb-v2" and got["KDCA"]["up_c"].iloc[0] == 28.0
+    clock[0] += 10 * sources.DB_TTL_S
+    assert sources.ml_lines(init) is got and len(asked) == 3  # held: the database is not read again
+    live.clear()
