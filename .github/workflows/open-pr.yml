@@ -1,0 +1,50 @@
+name: Open a pull request for a branch Claude pushed
+
+# The Claude app (claude.yml) does its work on a `claude/...` branch, pushes it, and leaves a
+# link for a person to open the pull request. A pull request opened from that link belongs to
+# the person who clicked it, and nobody can approve their own. This opens it instead, so the
+# change arrives as a pull request its reviewer did not author.
+#
+# Needs the repository setting "Allow GitHub Actions to create and approve pull requests"
+# (Settings, Actions, General, Workflow permissions).
+on:
+  push:
+    branches: ['claude/**']
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  open:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Open the pull request, once
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          if [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number')" ]; then
+            echo "A pull request for $BRANCH is already open; the push updated it."
+            exit 0
+          fi
+          ahead=$(gh api "repos/$REPO/compare/master...$BRANCH" --jq .ahead_by)
+          if [ "$ahead" = "0" ]; then
+            echo "$BRANCH has nothing that master lacks."
+            exit 0
+          fi
+          # The app names its branches claude/issue-<number>-<time>.
+          issue=$(printf '%s' "$BRANCH" | sed -nE 's#^claude/issue-([0-9]+)-.*#\1#p')
+          {
+            if [ -n "$issue" ]; then printf 'Closes #%s\n\n' "$issue"; fi
+            printf '## What changed\n\n'
+            git log -1 --format='%s%n%n%b'
+            printf '\n## How this was built\n\n'
+            printf 'Written by the Claude GitHub App'
+            if [ -n "$issue" ]; then printf ' from issue #%s' "$issue"; fi
+            printf '. This pull request was opened by a workflow so that a person reviews it. '
+            printf 'Nobody has read the change yet. The QC checks run on the branch push.\n'
+          } > body.md
+          gh pr create --base master --head "$BRANCH" --title "$(git log -1 --format=%s)" --body-file body.md
