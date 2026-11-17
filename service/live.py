@@ -51,5 +51,6 @@ def cached(key: str, ttl_s: float, fetch: Callable[[], Any]) -> Any:
 
 
 def clear() -> None:
+    """Empty the response cache and the failure record; the tests use it."""
     _cache.clear()
     _failed.clear()
