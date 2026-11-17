@@ -17,7 +17,7 @@ The target is drawn in [ARCHITECTURE.md](ARCHITECTURE.md). The way a change move
 | 3 | #36 | The Forecast and Stations tabs: observations, GFS, HRRR and NBM, the two corrections, today's verification. |
 | 4 | #37 | Training as a script, MLflow tracking and registry, data contracts, the golden backtest, the model card. |
 | 5 | #38 | The Lab tab: scorecard by lead, coverage, SHAP, feature importance. |
-| 6 | #39 | Cutover: the service replaces Dash on the live URL; dependencies locked with uv. |
+| 6 | #39 | Cutover: the service replaces Dash on the live URL; the container is built and booted in CI. |
 | 7 | #40 | Drift report, skill decay, scheduled retraining, promotion by pull request. |
 | 8 | #41 | 500 hPa height and 850 hPa temperature overlays; deep stations with several models. |
 | 9 | #42 | Analysis by optimal interpolation, scored at withheld stations. |

@@ -58,9 +58,10 @@ flowchart LR
 | Part | State | Issue |
 |---|---|---|
 | GFS fetch, pair logging, shadow inference, commit and deploy hook | built | |
-| Dash page (`app.py`) | built, retired at the cutover | #39 |
-| `service/` and `client/`: Map, Satellite | built, served at the cutover | #35, #39 |
-| Forecast and Stations tabs | built, served at the cutover | #36, #39 |
+| Dash page | retired at the cutover | #39 |
+| `service/` and `client/`: Map, Satellite | built | #35 |
+| Forecast and Stations tabs, with the weather around the temperature | built | #36 |
+| The container: client built in one stage, service in the next; built and booted in CI | built | #39 |
 | `build_lab` and the Lab tab | planned | #38 |
 | Upper air overlays, deep stations from the ledger | planned | #41 |
 | `build_analysis` and the analysis overlay | planned | #42 |
@@ -159,7 +160,10 @@ flowchart TD
 
 ## 5. Deployment
 
-One Docker container on Render serves the page. The scheduled workflow commits the new
-forecast grid to `master` and calls Render's deploy hook, so each cycle is a fresh
-container that loads its data once. Secrets (the database URL, the deploy hook) live in
-GitHub and Render settings and never in the repo.
+One Docker container on Render serves the page: a node stage builds the client, a python
+stage installs `service/requirements.txt` and runs `uvicorn service.app:app`. It holds no
+grib stack; the forecast jobs run in GitHub Actions from `requirements.txt`. The scheduled
+workflow commits the new forecast grid to `master` and calls Render's deploy hook, so each
+cycle is a fresh container that loads its data once. `qc.yml` builds and boots the same
+image on every pull request and calls each route. Secrets (the database URL, the deploy
+hook) live in GitHub and Render settings and never in the repo.

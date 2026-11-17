@@ -13,5 +13,5 @@ def test_clean_text_passes():
 
 def test_legacy_and_binary_paths_are_skipped():
     assert checked("docs/PLAN.md") and checked("service/app.py")
-    assert not checked("notebooks/common.py") and not checked("app.py")
+    assert not checked("notebooks/common.py") and not checked("src/heat/da/split.py")
     assert not checked("data/conus_heat_tracker.nc")

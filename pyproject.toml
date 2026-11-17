@@ -3,9 +3,8 @@ pythonpath = ["."]
 testpaths = ["tests"]
 
 [tool.ruff]
-# The notebooks keep their exploratory style. app.py is the Dash page and is removed at the
-# cutover (docs/PLAN.md), so it is not brought up to the gate.
-extend-exclude = ["notebooks", "app.py"]
+# The notebooks keep their exploratory style.
+extend-exclude = ["notebooks"]
 
 [tool.ruff.lint]
 select = ["E", "F"]

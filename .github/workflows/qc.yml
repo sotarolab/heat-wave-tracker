@@ -47,3 +47,26 @@ jobs:
           npm ci
           npm run build
           npx vitest run
+
+  container:
+    # The image Render builds, built and booted here first: a broken container fails the pull
+    # request instead of the deploy.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build
+        run: docker build -t us-nowcast .
+      - name: Boot and call the routes
+        run: |
+          docker run -d --name app -p 8051:8051 us-nowcast
+          for i in $(seq 1 30); do curl -fs http://127.0.0.1:8051/healthz && break || sleep 2; done
+          curl -fs http://127.0.0.1:8051/healthz | grep -q '"forecast":true'
+          curl -fs http://127.0.0.1:8051/ | grep -q '<div id="root">'
+          curl -fs http://127.0.0.1:8051/api/manifest | grep -q '"init"'
+          curl -fs http://127.0.0.1:8051/api/stations | grep -q '"KDCA"'
+          curl -fs -o field.png http://127.0.0.1:8051/api/field/t2m/0.png && file field.png | grep -q PNG
+          # The station page must answer even when a feed outside is slow or refuses the runner.
+          curl -fs http://127.0.0.1:8051/api/station/KDCA | grep -q '"headline"'
+      - name: Container log
+        if: always()
+        run: docker logs app | tail -40

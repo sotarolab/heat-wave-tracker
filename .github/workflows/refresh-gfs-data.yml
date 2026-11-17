@@ -6,6 +6,11 @@ on:
     - cron: "30 */6 * * *"
   workflow_dispatch: {}
 
+# One run at a time: two runs started together both fetch, and the second one's push is refused.
+concurrency:
+  group: refresh
+  cancel-in-progress: false
+
 permissions:
   contents: write
 
@@ -88,6 +93,8 @@ jobs:
             echo "changed=false" >> "$GITHUB_OUTPUT"
           else
             git commit -m "Auto-refresh GFS forecast + climate normals data"
+            # master may have moved while the fetch ran (a merged pull request): replay on top of it.
+            git pull --rebase origin master
             git push
             echo "changed=true" >> "$GITHUB_OUTPUT"
           fi

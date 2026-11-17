@@ -2,7 +2,7 @@
 src/heat/asos.py
 =================
 Fetch recent ASOS observations from Iowa Environmental Mesonet (IEM) for
-a single station. Used by the station panel in app.py, live fetch on
+a single station. Used by the station page (service/station.py), live fetch on
 click, cached in-process.
 
 Returns a tidy pandas DataFrame with temp_c and dewpoint_c columns.

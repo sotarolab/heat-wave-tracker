@@ -15,7 +15,7 @@ the predictive interval below leans on the residual spread of recent
 same-day pairs instead, with a small-sample correction (see
 pi95_halfwidth below) rather than an ensemble-spread relationship.
 
-Split out from app.py so it can be unit tested without importing the full
+Split out from the page so it can be unit tested without importing the full
 Dash/GFS-fetching stack (cfgrib/eccodes/herbie-data). See
 requirements-dev.txt for that split.
 

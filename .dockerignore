@@ -1,0 +1,11 @@
+# The image copies what it needs by name; this keeps the rest out of the build context.
+.git
+.github
+.claude
+client/node_modules
+client/dist
+notebooks
+docs
+tests
+out
+**/__pycache__
