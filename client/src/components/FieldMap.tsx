@@ -78,7 +78,11 @@ export function FieldMap({ image, bounds, opacity, dots, selected, onSelect, wea
       shown.current = next
     }
     next.once('load', swap)
-    return () => { next.off('load', swap); if (shown.current !== next) m.removeLayer(next) }
+    // A frame the gateway dropped is asked for again, twice at most, before the map is left as it was.
+    let tries = 0
+    const again = () => { if (++tries <= 2) setTimeout(() => next.setUrl(`${image}&retry=${tries}`), 500 * tries) }
+    next.on('error', again)
+    return () => { next.off('load', swap); next.off('error', again); if (shown.current !== next) m.removeLayer(next) }
   }, [image, bounds, opacity])
   useEffect(() => {
     const m = map.current

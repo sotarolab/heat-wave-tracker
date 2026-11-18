@@ -1,9 +1,33 @@
 import type { FieldMeta, Manifest, Network, StationPage, Stations, Unit } from './types'
 
-async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
-  const r = await fetch(path, { signal, headers: { accept: 'application/json' } })
-  if (!r.ok) {
-    let detail = r.statusText
+/** Waits before the second and third attempt. A gateway between the browser and the service can
+ *  drop a request the service never saw; asking again a moment later nearly always works, and a
+ *  panel that gives up on the first failure stays empty until the next five-minute refresh. */
+export const RETRY_MS = [400, 1200]
+const GATEWAY = new Set([502, 503, 504])
+const wait = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const id = setTimeout(resolve, ms)
+    signal?.addEventListener('abort', () => { clearTimeout(id); reject(signal.reason) }, { once: true })
+  })
+
+export async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
+  for (let attempt = 0; ; attempt++) {
+    const last = attempt >= RETRY_MS.length
+    let r: Response
+    try {
+      r = await fetch(path, { signal, headers: { accept: 'application/json' } })
+    } catch (e) {
+      if (last || signal?.aborted) throw e // the network is down, or the caller moved on
+      await wait(RETRY_MS[attempt], signal)
+      continue
+    }
+    if (r.ok) return (await r.json()) as T
+    if (GATEWAY.has(r.status) && !last) {
+      await wait(RETRY_MS[attempt], signal)
+      continue
+    }
+    let detail = r.statusText || `HTTP ${r.status}`
     try {
       detail = (await r.json()).detail ?? detail
     } catch {
@@ -11,7 +35,6 @@ async function get<T>(path: string, signal?: AbortSignal): Promise<T> {
     }
     throw new Error(detail)
   }
-  return (await r.json()) as T
 }
 
 export const api = {

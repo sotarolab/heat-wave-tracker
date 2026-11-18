@@ -22,4 +22,8 @@ COPY --from=client /client/dist client/dist
 # Render finds the port a Docker service listens on; 8051 is the one this service has always used.
 EXPOSE 8051
 # One process: the forecast is held in memory once, and the routes run in its thread pool.
-CMD ["uvicorn", "service.app:app", "--host", "0.0.0.0", "--port", "8051"]
+# Keep-alive: Render's proxy keeps connections to the service open and reuses them. uvicorn
+# closes an idle one after 5 seconds by default, and a request sent down a connection it has
+# just closed comes back to the reader as a 502. Seen on the first day live: about four
+# requests in ten. The service now holds idle connections longer than the proxy does.
+CMD ["uvicorn", "service.app:app", "--host", "0.0.0.0", "--port", "8051", "--timeout-keep-alive", "120"]
